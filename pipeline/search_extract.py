@@ -224,7 +224,7 @@ def zcta_table(con, states_parquet: Path) -> bool:
                CAST(trim("{lat_c}") AS DOUBLE) AS lat, CAST(trim("{lon_c}") AS DOUBLE) AS lon
         FROM zraw
     """)
-    con.execute(f"CREATE TABLE us_states AS SELECT usps, name AS sname, ST_GeomFromWKB(wkb) AS geom FROM read_parquet('{states_parquet}')")
+    con.execute(f"CREATE TABLE us_states AS SELECT usps, name AS sname, ST_GeomFromHEXWKB(wkb_hex) AS geom FROM read_parquet('{states_parquet}')")
     con.execute("""
         CREATE TABLE zcta AS SELECT z.zip, z.lat, z.lon, s.usps, s.sname
         FROM zpts z LEFT JOIN us_states s ON ST_Within(ST_Point(z.lon, z.lat), s.geom)

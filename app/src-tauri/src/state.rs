@@ -135,7 +135,26 @@ impl AppState {
                 Err(e) => eprintln!("world overview: {e:#}"),
             }
         }
-        let areas = self.paths.resources.join("us-areas");
+        // The search library needs a writable folder (it takes a lock file),
+        // and installed apps often live in read-only locations, so the
+        // bundled city list is copied to the data folder first.
+        let bundled = self.paths.resources.join("us-areas");
+        let areas = self.paths.data.join("base").join("us-areas");
+        if bundled.join("meta.json").exists()
+            && std::fs::read(bundled.join("meta.json")).ok() != std::fs::read(areas.join("meta.json")).ok()
+        {
+            let tmp = areas.with_extension("new");
+            let _ = std::fs::remove_dir_all(&tmp);
+            match copy_index(&bundled, &tmp) {
+                Ok(()) => {
+                    let _ = std::fs::remove_dir_all(&areas);
+                    if let Err(e) = std::fs::rename(&tmp, &areas) {
+                        eprintln!("areas index: {e:#}");
+                    }
+                }
+                Err(e) => eprintln!("copying areas index: {e:#}"),
+            }
+        }
         if areas.join("meta.json").exists() {
             if let Err(e) = search.add_index("us-areas", &areas) {
                 eprintln!("areas index: {e:#}");
@@ -146,6 +165,23 @@ impl AppState {
         *self.search.write().unwrap() = search;
         *self.installed.lock().unwrap() = inst;
     }
+}
+
+fn copy_index(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        let name = e.file_name();
+        if name.to_string_lossy().ends_with(".lock") {
+            continue;
+        }
+        if e.file_type()?.is_dir() {
+            copy_index(&e.path(), &dst.join(&name))?;
+        } else {
+            std::fs::copy(e.path(), dst.join(&name))?;
+        }
+    }
+    Ok(())
 }
 
 /// Deletes replaced pack files that could not be removed while in use.

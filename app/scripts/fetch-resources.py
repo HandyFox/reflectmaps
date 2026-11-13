@@ -49,18 +49,20 @@ def valhalla(platform: str):
             check=True,
         )
         wheel = next(Path(tmp).glob("pyvalhalla-*.whl"))
-        z = zipfile.ZipFile(wheel)
         exe = "valhalla/bin/valhalla_service" + (".exe" if platform == "windows" else "")
-        keep = [n for n in z.namelist()
-                if n == exe
-                or n.startswith("pyvalhalla.libs/")
-                or n.startswith("valhalla/.dylibs/")]
-        for n in keep:
-            if n.endswith("/"):
-                continue
-            target = dest / n
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(z.read(n))
+        # Close the wheel before the temporary folder is removed: Windows
+        # refuses to delete a file that is still open.
+        with zipfile.ZipFile(wheel) as z:
+            keep = [n for n in z.namelist()
+                    if n == exe
+                    or n.startswith("pyvalhalla.libs/")
+                    or n.startswith("valhalla/.dylibs/")]
+            for n in keep:
+                if n.endswith("/"):
+                    continue
+                target = dest / n
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(z.read(n))
         (dest / "valhalla" / "bin" / Path(exe).name).chmod(0o755)
     if platform == "windows":
         # valhalla_service.exe needs the Visual C++ runtime; ship it next to

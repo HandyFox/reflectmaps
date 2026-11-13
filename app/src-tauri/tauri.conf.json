@@ -25,7 +25,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "category": "Navigation",
+    "category": "Travel",
     "shortDescription": "Offline maps, search and directions",
     "longDescription": "ReflectMaps works without an internet connection: download the states you need, then browse, search places and addresses, and plan driving routes offline.",
     "copyright": "ReflectMaps contributors. Map data © OpenStreetMap contributors, Overture Maps Foundation.",

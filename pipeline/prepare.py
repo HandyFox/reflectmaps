@@ -107,7 +107,7 @@ def main():
         f"CREATE TABLE states AS SELECT STUSPS AS usps, NAME AS name, geom FROM ST_Read('{shp}')"
     )
     con.execute(
-        f"COPY (SELECT usps, name, ST_AsWKB(geom) AS wkb FROM states) TO '{out}/boundaries/us_states.parquet' (FORMAT PARQUET)"
+        f"COPY (SELECT usps, name, ST_AsHEXWKB(geom) AS wkb_hex FROM states) TO '{out}/boundaries/us_states.parquet' (FORMAT PARQUET)"
     )
     for r in regions:
         row = con.execute(

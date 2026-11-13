@@ -11,3 +11,4 @@ app/src-tauri/resources/us-areas/
 app/src-tauri/gen/
 .DS_Store
 __pycache__/
+zcta.txt
