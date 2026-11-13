@@ -1,0 +1,21 @@
+{
+  "comment": "Regions the data workflow can build. id = USPS code in lower case. bbox = [west, south, east, north]; it only pre-filters data, the Census state outline decides what belongs to a state.",
+  "regions": [
+    {
+      "id": "oh",
+      "name": "Ohio",
+      "usps": "OH",
+      "fips": "39",
+      "bbox": [-84.83, 38.40, -80.51, 42.00],
+      "geofabrik": "north-america/us/ohio"
+    },
+    {
+      "id": "ky",
+      "name": "Kentucky",
+      "usps": "KY",
+      "fips": "21",
+      "bbox": [-89.58, 36.49, -81.96, 39.15],
+      "geofabrik": "north-america/us/kentucky"
+    }
+  ]
+}

@@ -1,0 +1,273 @@
+name: Data packs
+
+# Builds map, search and routing packs for the chosen states and publishes
+# them as a GitHub release. The app reads the catalog from the release
+# tagged "data-current".
+on:
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "States to build (ids from pipeline/regions.json, comma separated)"
+        default: "oh,ky"
+      min_pass:
+        description: "Minimum search test pass rate (0 to 1) required to publish"
+        default: "0.8"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-build
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.prep.outputs.tag }}
+      regions: ${{ steps.prep.outputs.regions }}
+      protomaps: ${{ steps.prep.outputs.protomaps }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install duckdb==1.4.*
+      - id: prep
+        run: python pipeline/prepare.py --regions "${{ inputs.regions }}" --out build
+      - uses: Swatinem/rust-cache@v2
+      - name: Build search tools
+        run: |
+          cargo build -p rm-search --release
+          mkdir -p build/bin
+          cp target/release/rm-search-build target/release/rm-search-eval target/release/rm-search-query build/bin/
+      - name: Create draft release
+        run: |
+          # remove drafts left behind by failed runs
+          gh release list --limit 100 --json tagName,isDraft \
+            --jq '.[] | select(.isDraft and (.tagName | startswith("data-2"))) | .tagName' |
+            while read -r t; do gh release delete "$t" --yes --cleanup-tag || true; done
+          gh release create "${{ steps.prep.outputs.tag }}" --draft --target "${{ github.sha }}" \
+            --title "Map data ${{ steps.prep.outputs.tag }}" \
+            --notes "Map, search and routing packs. Overture ${{ steps.prep.outputs.overture }}, Protomaps ${{ steps.prep.outputs.protomaps }}, OpenStreetMap via Geofabrik."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: build/
+          retention-days: 2
+
+  map:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.prepare.outputs.regions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: build, path: build }
+      - name: Install pmtiles
+        run: |
+          gh release download -R protomaps/go-pmtiles --pattern '*Linux_x86_64.tar.gz' -O pmtiles.tgz
+          tar xzf pmtiles.tgz pmtiles && sudo mv pmtiles /usr/local/bin/
+      - name: Extract map tiles
+        run: |
+          mkdir -p dist
+          pmtiles extract "https://build.protomaps.com/${{ needs.prepare.outputs.protomaps }}.pmtiles" \
+            "dist/${{ matrix.region }}-map.pmtiles" \
+            --region="build/boundaries/${{ matrix.region }}.geojson" --maxzoom=15 --download-threads=4
+          pmtiles show "dist/${{ matrix.region }}-map.pmtiles" | head -20
+      - name: Upload
+        run: |
+          bash pipeline/meta.sh dist/*.pmtiles
+          gh release upload "${{ needs.prepare.outputs.tag }}" dist/*.pmtiles --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-map-${{ matrix.region }}
+          path: dist/*.meta.json
+          retention-days: 2
+
+  world:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pmtiles
+        run: |
+          gh release download -R protomaps/go-pmtiles --pattern '*Linux_x86_64.tar.gz' -O pmtiles.tgz
+          tar xzf pmtiles.tgz pmtiles && sudo mv pmtiles /usr/local/bin/
+      - name: Extract world overview (zoom 0-6)
+        run: |
+          mkdir -p dist
+          pmtiles extract "https://build.protomaps.com/${{ needs.prepare.outputs.protomaps }}.pmtiles" \
+            dist/world-base.pmtiles --maxzoom=6 --download-threads=4
+          bash pipeline/meta.sh dist/world-base.pmtiles
+          gh release upload "${{ needs.prepare.outputs.tag }}" dist/world-base.pmtiles --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-world
+          path: dist/*.meta.json
+          retention-days: 2
+
+  search:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.prepare.outputs.regions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: build, path: build }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install duckdb==1.4.*
+      - name: Extract places and addresses from Overture
+        run: python pipeline/search_extract.py state --region ${{ matrix.region }} --out records.ndjson
+      - name: Build index
+        run: |
+          chmod +x build/bin/*
+          build/bin/rm-search-build records.ndjson "index/${{ matrix.region }}-search"
+          mkdir -p dist
+          tar czf "dist/${{ matrix.region }}-search.tar.gz" -C index "${{ matrix.region }}-search"
+          bash pipeline/meta.sh dist/*.tar.gz
+          gh release upload "${{ needs.prepare.outputs.tag }}" dist/*.tar.gz --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-search-${{ matrix.region }}
+          path: dist/*.meta.json
+          retention-days: 2
+
+  areas:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: build, path: build }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install duckdb==1.4.*
+      - name: Extract states, counties, cities and ZIP codes
+        run: python pipeline/search_extract.py areas --out areas.ndjson
+      - name: Build index
+        run: |
+          chmod +x build/bin/*
+          build/bin/rm-search-build areas.ndjson index/us-areas
+          mkdir -p dist
+          tar czf dist/us-areas.tar.gz -C index us-areas
+          bash pipeline/meta.sh dist/us-areas.tar.gz
+          gh release upload "${{ needs.prepare.outputs.tag }}" dist/us-areas.tar.gz --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-areas
+          path: dist/*.meta.json
+          retention-days: 2
+
+  routing:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: build, path: build }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install pyvalhalla==3.9.1 duckdb==1.4.*
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+      - name: Download OpenStreetMap extracts
+        run: |
+          mkdir -p osm
+          python - <<'EOF' > osm/urls.txt
+          import json
+          for r in json.load(open("build/build.json"))["regions"]:
+              print(f"https://download.geofabrik.de/{r['geofabrik']}-latest.osm.pbf")
+          EOF
+          cd osm && while read -r u; do curl -fsSL --retry 3 -O "$u"; done < urls.txt && ls -la
+      - name: Merge
+        run: |
+          n=$(ls osm/*.osm.pbf | wc -l)
+          if [ "$n" -gt 1 ]; then osmium merge osm/*.osm.pbf -o merged.osm.pbf; else cp osm/*.osm.pbf merged.osm.pbf; fi
+          ls -la merged.osm.pbf
+      - name: Build routing graph
+        run: |
+          python pipeline/valhalla_config.py "$PWD/valhalla_tiles" "$PWD/admins.sqlite" > valhalla.json
+          python -m valhalla valhalla_build_admins -c valhalla.json merged.osm.pbf
+          python -m valhalla valhalla_build_tiles -c valhalla.json merged.osm.pbf
+          du -sh valhalla_tiles
+      - name: Smoke test (Cincinnati to Louisville)
+        run: |
+          BIN=$(python -c "import valhalla,os;print(os.path.dirname(valhalla.__file__))")/bin
+          $BIN/valhalla_service valhalla.json route \
+            '{"locations":[{"lat":39.1031,"lon":-84.5120},{"lat":38.2527,"lon":-85.7585}],"costing":"auto","alternates":2,"directions_options":{"units":"miles"}}' \
+            > route.json
+          python -c "import json;d=json.load(open('route.json'));s=d['trip']['summary'];print('miles',s['length'],'minutes',round(s['time']/60),'alternates',len(d.get('alternates',[])))"
+      - name: Split into state packs
+        run: |
+          python pipeline/routing_split.py --tiles valhalla_tiles --build build/build.json --out dist
+          bash pipeline/meta.sh dist/*.tar.gz
+          gh release upload "${{ needs.prepare.outputs.tag }}" dist/*.tar.gz --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-routing
+          path: dist/*.meta.json
+          retention-days: 2
+
+  eval:
+    needs: [prepare, search, areas]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: build, path: build }
+      - name: Score search against eval/cases.json
+        run: |
+          chmod +x build/bin/*
+          mkdir -p packs && cd packs
+          gh release download "${{ needs.prepare.outputs.tag }}" --pattern '*-search.tar.gz' --pattern 'us-areas.tar.gz'
+          for f in *.tar.gz; do tar xzf "$f"; done
+          cd ..
+          dirs=$(ls -d packs/*/)
+          set -o pipefail
+          build/bin/rm-search-eval --cases eval/cases.json --min-pass "${{ inputs.min_pass }}" $dirs | tee eval.txt
+      - if: always()
+        run: |
+          { echo '### Search accuracy'; echo '```'; cat eval.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [prepare, map, world, search, areas, routing, eval]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: build, path: build }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "meta-*", path: meta, merge-multiple: true }
+      - name: Catalog
+        run: python pipeline/make_catalog.py --build build/build.json --meta meta --out catalog.json
+      - name: Publish
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          gh release upload "$TAG" catalog.json --clobber
+          gh release edit "$TAG" --draft=false --prerelease --latest=false
+          if ! gh release view data-current >/dev/null 2>&1; then
+            gh release create data-current --prerelease --latest=false --target "${{ github.sha }}" \
+              --title "Current map data" \
+              --notes "Pointer to the newest map data. The app downloads catalog.json from here."
+          fi
+          gh release upload data-current catalog.json --clobber
+      - name: Keep only the two newest data builds
+        run: |
+          gh release list --limit 100 --json tagName,createdAt,isDraft \
+            --jq '[.[] | select((.tagName | startswith("data-2")) and (.isDraft | not))] | sort_by(.createdAt) | reverse | .[2:] | .[].tagName' |
+            while read -r t; do gh release delete "$t" --yes --cleanup-tag; done

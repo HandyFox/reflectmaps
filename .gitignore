@@ -1,0 +1,13 @@
+/target/
+node_modules/
+/build/
+/dist/
+*.ndjson
+app/dist/
+app/public/basemaps-assets/
+app/src-tauri/resources/valhalla-runtime/
+app/src-tauri/resources/world-base.pmtiles
+app/src-tauri/resources/us-areas/
+app/src-tauri/gen/
+.DS_Store
+__pycache__/
