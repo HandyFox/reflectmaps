@@ -274,14 +274,18 @@ pub(crate) fn rerank(mut hits: Vec<Hit>, q: &ParsedQuery, near: Option<(f64, f64
     hits.retain(|h| h.score > 0.0);
     hits.sort_by(|a, b| b.score.total_cmp(&a.score));
 
-    // Drop near-duplicates: same name within 150 m (the same place listed
-    // twice, or a place and its own address record).
+    // Drop near-duplicates. Map data often lists one venue several times
+    // with slightly different addresses ("Churchill Downs" at 700 Central
+    // Ave and at 600 Terminal Dr). Same name within 600 m counts as the same
+    // place; the best-ranked copy is kept. Addresses and streets only merge
+    // when they are the same text.
     let mut out: Vec<Hit> = Vec::with_capacity(limit);
     for h in hits {
         let dup = out.iter().any(|o| {
-            o.name.eq_ignore_ascii_case(&h.name)
-                && o.label.eq_ignore_ascii_case(&h.label)
-                && haversine_km(o.lat, o.lon, h.lat, h.lon) < 0.15
+            let d = haversine_km(o.lat, o.lon, h.lat, h.lon);
+            let same_name = normalize::normalize(&o.name) == normalize::normalize(&h.name);
+            let place_like = !matches!(h.kind.as_str(), "address" | "street");
+            same_name && (d < 0.15 && o.label.eq_ignore_ascii_case(&h.label) || place_like && d < 0.6)
         }) || out.iter().any(|o| o.id == h.id);
         if !dup {
             out.push(h);
