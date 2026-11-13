@@ -144,9 +144,14 @@ impl IndexBuilder {
 
     pub fn add(&mut self, r: &Record) -> Result<()> {
         let mut r = r.clone();
-        r.name = normalize::fix_case(&r.name);
-        r.label = normalize::fix_case(&r.label);
-        r.street = normalize::fix_case(&r.street);
+        r.name = if matches!(r.kind.as_str(), "address" | "street") {
+            normalize::fix_case_words(&r.name)
+        } else {
+            normalize::fix_case(&r.name)
+        };
+        r.label = normalize::fix_state_codes(&normalize::fix_case_words(&normalize::fix_case(&r.label)));
+        r.street = normalize::fix_case_words(&r.street);
+        r.city = normalize::fix_case_words(&r.city);
         let r = &r;
         let f = &self.f;
         let mut name_words = normalize::normalize(&r.name);

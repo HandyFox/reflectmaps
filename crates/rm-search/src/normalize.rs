@@ -163,6 +163,54 @@ pub fn fix_case(s: &str) -> String {
         .join(" ")
 }
 
+/// Title-case each ALL-CAPS word of three or more letters ("801 PLUM Street"
+/// -> "801 Plum Street"). Used for addresses, streets and address lines,
+/// where capitals carry no meaning; business names keep their own casing.
+pub fn fix_case_words(s: &str) -> String {
+    const KEEP_UPPER: &[&str] = &["II", "III", "IV", "VI", "VII", "VIII", "PO", "US", "USA"];
+    s.split(' ')
+        .map(|w| {
+            let letters: Vec<char> = w.chars().filter(|c| c.is_alphabetic()).collect();
+            if letters.len() < 3 || letters.iter().any(|c| c.is_lowercase()) || KEEP_UPPER.contains(&w) {
+                return w.to_string();
+            }
+            fix_case(w)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+const STATE_CODES: &[&str] = &[
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
+    "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC",
+    "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "PR",
+];
+
+/// "Salvisa, Ky 40372" -> "Salvisa, KY 40372": a two-letter state code
+/// before a ZIP code or at the end of the label is written in capitals.
+pub fn fix_state_codes(s: &str) -> String {
+    let words: Vec<&str> = s.split(' ').collect();
+    let n = words.len();
+    words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let core = w.trim_end_matches(',');
+            let upper = core.to_ascii_uppercase();
+            let next_is_zip = words
+                .get(i + 1)
+                .map(|x| x.len() >= 5 && x.chars().take(5).all(|c| c.is_ascii_digit()))
+                .unwrap_or(false);
+            if core.len() == 2 && STATE_CODES.contains(&upper.as_str()) && (next_is_zip || i + 1 == n) && i > 0 {
+                format!("{upper}{}", &w[core.len()..])
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn is_stop_word(t: &str) -> bool {
     STOP_WORDS.contains(&t)
 }
@@ -227,6 +275,12 @@ mod tests {
         assert_eq!(fix_case("125 N HIGH ST"), "125 N High St");
         assert_eq!(fix_case("100 W 1ST AVE"), "100 W 1st Ave");
         assert_eq!(fix_case("McDonald's"), "McDonald's");
+        assert_eq!(fix_case_words("801 PLUM Street"), "801 Plum Street");
+        assert_eq!(fix_case_words("5025 LOUSVILLE Road"), "5025 Lousville Road");
+        assert_eq!(fix_case_words("US 42"), "US 42");
+        assert_eq!(fix_state_codes("Salvisa, Ky 40372"), "Salvisa, KY 40372");
+        assert_eq!(fix_state_codes("Louisville, ky"), "Louisville, KY");
+        assert_eq!(fix_state_codes("Oh My Grill, Columbus"), "Oh My Grill, Columbus");
     }
 
     #[test]
