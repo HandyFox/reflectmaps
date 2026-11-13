@@ -1,3 +1,2 @@
-GEOID_ZCTA5_20	ALAND	AWATER	ALAND_SQMI	AWATER_SQMI	INTPTLAT	INTPTLONG                                                                                                               
+GEOID	ALAND	AWATER	ALAND_SQMI	AWATER_SQMI	INTPTLAT	INTPTLONG                 
 43215	1	1	1	1	39.9650	-83.0050   
-02108	1	1	1	1	42.35	-71.06

@@ -206,7 +206,7 @@ def zcta_table(con, states_parquet: Path) -> bool:
     name = next(n for n in z.namelist() if n.endswith(".txt"))
     Path("zcta.txt").write_bytes(z.read(name))
     con.execute("""
-        CREATE TABLE zraw AS SELECT * FROM read_csv('zcta.txt', delim='\t', header=true, all_varchar=true)
+        CREATE TABLE zraw AS SELECT * FROM read_csv('zcta.txt', header=true, all_varchar=true, auto_detect=true)
     """)
     cols = [r[0] for r in con.execute("DESCRIBE zraw").fetchall()]
     print(f"ZIP file columns: {cols}", file=sys.stderr)

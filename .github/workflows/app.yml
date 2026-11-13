@@ -1,0 +1,125 @@
+name: App
+
+# Builds the installers for Windows, macOS (Apple Silicon) and Linux on
+# GitHub's free runners. Run it from the Actions tab with "publish" ticked,
+# or push a tag like v0.1.0, to publish them as a release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["app/**", "crates/**", "Cargo.toml", "Cargo.lock", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["app/**", "crates/**", "Cargo.toml", "Cargo.lock"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the installers as a GitHub release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-22.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+      - name: Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install npm packages
+        working-directory: app
+        run: npm ci
+      - name: Map fonts and icons
+        working-directory: app
+        run: node scripts/fetch-assets.mjs
+      - name: Routing engine, world map and city list
+        working-directory: app
+        run: python scripts/fetch-resources.py --platform ${{ matrix.platform }}
+      - name: Check the bundled routing engine
+        working-directory: app
+        run: |
+          pip install pyvalhalla==3.9.1
+          python scripts/smoke-routing.py
+      - name: Tests
+        if: matrix.platform == 'linux'
+        run: cargo test -p rm-search -p reflectmaps
+      - name: Build installers
+        working-directory: app
+        run: npx tauri build
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p out
+          B=target/release/bundle
+          case "${{ matrix.platform }}" in
+            windows) cp $B/msi/*.msi $B/nsis/*.exe out/ ;;
+            macos)   cp $B/dmg/*.dmg out/ ;;
+            linux)   cp $B/deb/*.deb $B/appimage/*.AppImage $B/rpm/*.rpm out/ ;;
+          esac
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: out/*
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: out
+          merge-multiple: true
+      - name: Publish release
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in v*) ;; *) TAG="v$VERSION" ;; esac
+          cat > notes.md <<EOF
+          ReflectMaps $TAG: offline maps for Windows, macOS (Apple Silicon) and Linux.
+
+          **Install**
+          - Windows: \`ReflectMaps_*_x64-setup.exe\` (or the .msi)
+          - macOS 14+ on Apple Silicon: the .dmg. The app is not notarized yet: right-click it and choose Open the first time.
+          - Linux: the .AppImage (any distribution), .deb (Ubuntu/Debian) or .rpm (Fedora)
+
+          Then open **Downloads** in the app and download Ohio or Kentucky. After that, everything works with the internet off.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* --title "ReflectMaps $TAG" --notes-file notes.md --latest --target "${{ github.sha }}"
+          fi

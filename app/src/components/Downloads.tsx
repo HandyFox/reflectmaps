@@ -83,7 +83,11 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
       <p className="muted small pad-x">
         Download a state once to browse, search and get directions there with no internet connection.
       </p>
-      {error && <div className="note warn">{online ? error : "Offline. Showing the last downloaded list."}</div>}
+      {error && (
+        <div className="note warn">
+          {catalog ? "Offline. Showing the last downloaded list." : error}
+        </div>
+      )}
       {loading && !catalog && <div className="muted pad">Loading the list of states…</div>}
       {!loading && regions.length === 0 && <div className="note">No download list yet. Connect to the internet once to see available states.</div>}
 
