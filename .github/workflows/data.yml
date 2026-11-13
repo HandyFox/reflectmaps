@@ -239,7 +239,7 @@ jobs:
           cd ..
           dirs=$(ls -d packs/*/)
           set -o pipefail
-          build/bin/rm-search-eval --cases eval/cases.json --min-pass "${{ inputs.min_pass }}" $dirs | tee eval.txt
+          build/bin/rm-search-eval --cases eval/cases.json --min-pass "${{ inputs.min_pass || '0.9' }}" $dirs | tee eval.txt
       - if: always()
         run: |
           { echo '### Search accuracy'; echo '```'; cat eval.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

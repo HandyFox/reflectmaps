@@ -278,14 +278,100 @@ impl Searcher {
         for idx in &self.indexes {
             let q = build_query(&idx.f, &parsed);
             let searcher = idx.reader.searcher();
-            let top = searcher.search(&q, &TopDocs::with_limit(400).order_by_score())?;
+            // Candidates are picked by text score weighted by prominence and
+            // distance, so a short prefix such as "churc" still brings back
+            // Churchill Downs rather than 400 arbitrary words starting "churc".
+            // A second, nearby-only pass finds close places for category
+            // searches ("gas station" -> the Speedway around the corner).
+            let mut top = searcher.search(&q, &weighted_collector(600, opts.near, 300.0))?;
+            if opts.near.is_some() {
+                let seen: std::collections::HashSet<_> = top.iter().map(|(_, a)| *a).collect();
+                for (s, a) in searcher.search(&q, &weighted_collector(150, opts.near, 4.0))? {
+                    if !seen.contains(&a) {
+                        top.push((s, a));
+                    }
+                }
+            }
             for (bm25, addr) in top {
                 let doc: TantivyDocument = searcher.doc(addr)?;
                 let hit = rank::to_hit(&idx.f, &doc, bm25);
                 all.push(hit);
             }
         }
+        // A house number that isn't in the address data ("123 N High St"
+        // when only 100 and 125 are listed): estimate its position from the
+        // neighboring numbers on the same street.
+        if let Some(num) = parsed.house_number.clone() {
+            let first = rank::rerank(all.clone(), &parsed, opts.near, 60);
+            for street in first.iter().filter(|h| h.kind == "street").take(3) {
+                if let Some(est) = self.estimate_address(street, &num)? {
+                    all.push(est);
+                }
+            }
+        }
         Ok(rank::rerank(all, &parsed, opts.near, limit))
+    }
+
+    fn estimate_address(&self, street: &Hit, num: &str) -> Result<Option<Hit>> {
+        let Some(n) = leading_number(num) else { return Ok(None) };
+        let street_norm = normalize::normalize(&street.name);
+        let town = street.label.split(", ").next().unwrap_or("");
+        let town_norm = normalize::normalize(town);
+        let mut pts: Vec<(u64, f64, f64)> = Vec::new();
+        for idx in &self.indexes {
+            let f = &idx.f;
+            let mut must: Vec<(Occur, Box<dyn Query>)> = vec![(
+                Occur::Must,
+                Box::new(TermQuery::new(Term::from_field_text(f.kind, "address"), IndexRecordOption::Basic)),
+            )];
+            for t in street_norm.split(' ').chain(town_norm.split(' ')).filter(|t| !t.is_empty()) {
+                must.push((
+                    Occur::Must,
+                    Box::new(TermQuery::new(Term::from_field_text(f.text, t), IndexRecordOption::Basic)),
+                ));
+            }
+            let searcher = idx.reader.searcher();
+            let top = searcher.search(&BooleanQuery::new(must), &TopDocs::with_limit(3000).order_by_score())?;
+            for (_, addr) in top {
+                let doc: TantivyDocument = searcher.doc(addr)?;
+                let h = rank::to_hit(f, &doc, 0.0);
+                let name_norm = normalize::normalize(&h.name);
+                let rest = name_norm.split_once(' ').map(|x| x.1).unwrap_or("");
+                let h_town = normalize::normalize(h.label.split(", ").next().unwrap_or(""));
+                if rest != street_norm || h_town != town_norm {
+                    continue;
+                }
+                if let Some(hn) = leading_number(&h.name) {
+                    if hn == n {
+                        return Ok(None); // the exact address exists; no estimate needed
+                    }
+                    pts.push((hn, h.lat, h.lon));
+                }
+            }
+        }
+        // Prefer neighbors on the same side of the street (same parity).
+        let same: Vec<_> = pts.iter().copied().filter(|p| p.0 % 2 == n % 2).collect();
+        let pool = if same.len() >= 2 { same } else { pts };
+        let below = pool.iter().filter(|p| p.0 < n).max_by_key(|p| p.0).copied();
+        let above = pool.iter().filter(|p| p.0 > n).min_by_key(|p| p.0).copied();
+        let (lat, lon) = match (below, above) {
+            (Some(a), Some(b)) => {
+                let t = (n - a.0) as f64 / (b.0 - a.0) as f64;
+                (a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t)
+            }
+            (Some(a), None) | (None, Some(a)) if a.0.abs_diff(n) <= 200 => (a.1, a.2),
+            _ => return Ok(None),
+        };
+        let mut est = street.clone();
+        est.id = format!("est:{num}:{}", street.id);
+        est.kind = "address".into();
+        est.name = format!("{num} {}", street.name);
+        est.lat = lat;
+        est.lon = lon;
+        est.number = num.to_string();
+        est.norm = format!("{} {}", normalize::normalize(num), street.norm);
+        est.approximate = true;
+        Ok(Some(est))
     }
 
     /// Nearest address, place or street to a point ("what's here").
@@ -319,6 +405,33 @@ impl Searcher {
         }
         Ok(best.map(|(_, h)| h))
     }
+}
+
+/// Top documents by text score x prominence x closeness to `near`.
+fn weighted_collector(
+    limit: usize,
+    near: Option<(f64, f64)>,
+    scale_km: f64,
+) -> impl tantivy::collector::Collector<Fruit = Vec<(f32, tantivy::DocAddress)>> {
+    TopDocs::with_limit(limit).tweak_score(move |seg: &tantivy::SegmentReader| {
+        let ff = seg.fast_fields();
+        let imp = ff.f64("importance").map(|c| c.first_or_default_col(0.0)).ok();
+        let lat = ff.f64("lat").map(|c| c.first_or_default_col(0.0)).ok();
+        let lon = ff.f64("lon").map(|c| c.first_or_default_col(0.0)).ok();
+        move |doc: tantivy::DocId, score: tantivy::Score| -> f32 {
+            let i = imp.as_ref().map_or(0.3, |c| c.get_val(doc));
+            let d = match (near, &lat, &lon) {
+                (Some((nlat, nlon)), Some(la), Some(lo)) => rank::haversine_km(nlat, nlon, la.get_val(doc), lo.get_val(doc)),
+                _ => 0.0,
+            };
+            score * (0.4 + i as f32) / (1.0 + (d / scale_km) as f32)
+        }
+    })
+}
+
+fn leading_number(s: &str) -> Option<u64> {
+    let digits: String = s.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 fn bbox_query(f: &Fields, lat: f64, lon: f64, r: f64) -> Box<dyn Query> {

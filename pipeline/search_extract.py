@@ -67,7 +67,9 @@ def state_mode(con, rel, region, boundary: Path, out: Path):
     pc = columns(con, ppath)
     print(f"places columns: {sorted(pc)}", file=sys.stderr)
     if "taxonomy" in pc:
-        cat = "coalesce(basic_category, taxonomy.primary)" if "basic_category" in pc else "taxonomy.primary"
+        # The specific category ("pizza_restaurant") reads better and lets
+        # "pizza" find pizzerias; the broad basic_category is the fallback.
+        cat = "coalesce(taxonomy.primary, basic_category)" if "basic_category" in pc else "taxonomy.primary"
         words = "array_to_string(taxonomy.hierarchy, ' ') || ' ' || coalesce(taxonomy.primary, '')"
     elif "categories" in pc:
         cat = "categories.primary"
@@ -99,9 +101,12 @@ def state_mode(con, rel, region, boundary: Path, out: Path):
     city = "address_levels[2].value" if "address_levels" in ac else "NULL"
     if "postal_city" in ac:
         city = f"coalesce(postal_city, {city})"
+    # Each address keeps its own state: packs reach a little past the state
+    # line, and "Covington, KY" must not become "Covington, OH".
+    astate = f"coalesce(upper(nullif(trim(address_levels[1].value), '')), '{usps}')" if "address_levels" in ac else f"'{usps}'"
     con.execute(f"""
         CREATE TABLE addr AS
-        SELECT id, trim(number) AS number, trim(street) AS street, postcode AS zip, {city} AS city,
+        SELECT id, trim(number) AS number, trim(street) AS street, postcode AS zip, {city} AS city, {astate} AS state,
                (bbox.ymin + bbox.ymax) / 2 AS lat, (bbox.xmin + bbox.xmax) / 2 AS lon
         FROM read_parquet('{apath}', hive_partitioning=1)
         WHERE country = 'US' AND {where} AND street IS NOT NULL AND number IS NOT NULL
@@ -131,13 +136,13 @@ def state_mode(con, rel, region, boundary: Path, out: Path):
           FROM places
           UNION ALL
           SELECT 'ova:' || id, 'address', number || ' ' || street,
-                 concat_ws(', ', nullif(city, ''), concat_ws(' ', '{st}', zip)),
-                 '', '', coalesce(city, ''), '{st}', coalesce(zip, ''), lat, lon, 0.3, '', '', street, 'overture-addresses', []::VARCHAR[]
+                 concat_ws(', ', nullif(city, ''), concat_ws(' ', state, zip)),
+                 '', '', coalesce(city, ''), state, coalesce(zip, ''), lat, lon, 0.3, '', '', street, 'overture-addresses', []::VARCHAR[]
           FROM addr1
           UNION ALL
           SELECT 'st:' || md5(lower(street) || '|' || lower(coalesce(city, ''))), 'street', any_value(street),
-                 concat_ws(', ', nullif(any_value(city), ''), '{st}'),
-                 '', '', coalesce(any_value(city), ''), '{st}', '',
+                 concat_ws(', ', nullif(any_value(city), ''), any_value(state)),
+                 '', '', coalesce(any_value(city), ''), any_value(state), '',
                  median(lat), median(lon), least(0.6, 0.2 + ln(count(*)) / 20), '', '', any_value(street), 'overture-addresses', []::VARCHAR[]
           FROM addr1 GROUP BY lower(street), lower(coalesce(city, ''))
         ) TO '{out}' (FORMAT JSON)

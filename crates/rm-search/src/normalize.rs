@@ -137,7 +137,13 @@ pub fn fix_case(s: &str) -> String {
     if letters < 3 || s.chars().any(|c| c.is_lowercase()) {
         return s.to_string();
     }
-    const KEEP_UPPER: &[&str] = &["N", "S", "E", "W", "NE", "NW", "SE", "SW", "US", "SR", "CR", "II", "III", "IV", "PO"];
+    const KEEP_UPPER: &[&str] = &[
+        "N", "S", "E", "W", "NE", "NW", "SE", "SW", "US", "USA", "SR", "CR", "II", "III", "IV", "PO",
+        // common acronyms and brands
+        "CVS", "BP", "KFC", "IHOP", "YMCA", "YWCA", "UPS", "USPS", "AAA", "ATM", "LLC", "LLP", "PLLC",
+        "PSC", "DMV", "VA", "GNC", "PNC", "TD", "BBQ", "DQ", "AT&T", "H&R", "BB&T", "CPA", "DDS", "MD",
+        "UK", "OSU", "UC", "UK", "VFW", "AMC", "TJ", "QT", "RV", "ER", "ICU", "DBA", "INC",
+    ];
     s.split(' ')
         .map(|w| {
             if KEEP_UPPER.contains(&w) {
@@ -170,6 +176,11 @@ pub fn fix_case_words(s: &str) -> String {
     const KEEP_UPPER: &[&str] = &["II", "III", "IV", "VI", "VII", "VIII", "PO", "US", "USA"];
     s.split(' ')
         .map(|w| {
+            // "9TH" -> "9th", "21ST" -> "21st"
+            let digits = w.chars().take_while(|c| c.is_ascii_digit()).count();
+            if digits > 0 && matches!(&w[digits..], "ST" | "ND" | "RD" | "TH") {
+                return format!("{}{}", &w[..digits], w[digits..].to_ascii_lowercase());
+            }
             let letters: Vec<char> = w.chars().filter(|c| c.is_alphabetic()).collect();
             if letters.len() < 3 || letters.iter().any(|c| c.is_lowercase()) || KEEP_UPPER.contains(&w) {
                 return w.to_string();
@@ -278,6 +289,7 @@ mod tests {
         assert_eq!(fix_case_words("801 PLUM Street"), "801 Plum Street");
         assert_eq!(fix_case_words("5025 LOUSVILLE Road"), "5025 Lousville Road");
         assert_eq!(fix_case_words("US 42"), "US 42");
+        assert_eq!(fix_case_words("1100 East 9TH Street"), "1100 East 9th Street");
         assert_eq!(fix_state_codes("Salvisa, Ky 40372"), "Salvisa, KY 40372");
         assert_eq!(fix_state_codes("Louisville, ky"), "Louisville, KY");
         assert_eq!(fix_state_codes("Oh My Grill, Columbus"), "Oh My Grill, Columbus");

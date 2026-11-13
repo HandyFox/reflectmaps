@@ -73,7 +73,8 @@ impl ParsedQuery {
 }
 
 pub(crate) fn fuzzy_distance(tok: &str) -> u8 {
-    if tok.chars().all(|c| c.is_ascii_digit()) {
+    // Numbers and ordinals must match exactly: "9th" is not "79th".
+    if tok.chars().any(|c| c.is_ascii_digit()) {
         return 0;
     }
     match tok.len() {
@@ -158,8 +159,12 @@ fn token_match(tok: &str, is_last_open: bool, doc: &[&str]) -> f64 {
             best = best.max(0.97);
             continue;
         }
-        if dist > 0 && d.len().abs_diff(tok.len()) <= dist && levenshtein(tok, d) <= dist {
-            best = best.max(0.8);
+        if dist > 0 && d.len().abs_diff(tok.len()) <= dist {
+            let e = levenshtein(tok, d);
+            if e <= dist {
+                // one slip in a long word is a mild typo; more is less certain
+                best = best.max(if e == 1 && tok.len() >= 7 { 0.88 } else { 0.8 });
+            }
         }
         if is_last_open && tok.len() >= 5 && d.len() > tok.len() {
             let prefix: String = d.chars().take(tok.chars().count()).collect();
@@ -201,6 +206,37 @@ fn is_area(kind: &str) -> bool {
 pub(crate) fn rerank(mut hits: Vec<Hit>, q: &ParsedQuery, near: Option<(f64, f64)>, limit: usize) -> Vec<Hit> {
     let n_meaningful = q.meaningful.len() as f64;
     let last_idx = q.tokens.len() - 1;
+    let matches_cat = |h: &Hit| -> bool {
+        let cat_norm = normalize::normalize(&normalize::category_words(&h.category));
+        let cat_tokens: Vec<&str> = cat_norm.split(' ').filter(|t| !t.is_empty()).collect();
+        !cat_tokens.is_empty() && q.meaningful.iter().all(|&i| token_match(&q.tokens[i], false, &cat_tokens) >= 0.8)
+    };
+    // "coffee", "gas station": when several candidates are that kind of
+    // business, the query is a category search. Then businesses of another
+    // kind that merely have the word in their name drop back.
+    let category_query = q.house_number.is_none() && hits.iter().filter(|h| matches_cat(h)).count() >= 3;
+    let debug = std::env::var_os("RM_DEBUG").is_some();
+    // Category words shared by the matching places ("restaurant" for pizza
+    // restaurants). A place whose own category shares one of them is a
+    // related business (an Italian restaurant called "Brick'd Pizza") and is
+    // not pushed back.
+    const GENERIC: &[&str] = &["and", "of", "the", "shop", "store", "service", "services", "center", "other"];
+    let cat_tokens_of = |h: &Hit| -> Vec<String> {
+        normalize::normalize(&normalize::category_words(&h.category))
+            .split(' ')
+            .filter(|t| !t.is_empty() && !GENERIC.contains(t))
+            .map(str::to_string)
+            .collect()
+    };
+    let family: std::collections::HashSet<String> = if category_query {
+        hits.iter()
+            .filter(|h| matches_cat(h))
+            .flat_map(|h| cat_tokens_of(h))
+            .filter(|t| !q.tokens.contains(t))
+            .collect()
+    } else {
+        Default::default()
+    };
     for h in hits.iter_mut() {
         let doc_tokens: Vec<&str> = h.norm.split(' ').collect();
         let name_norm = normalize::normalize(&h.name);
@@ -217,7 +253,24 @@ pub(crate) fn rerank(mut hits: Vec<Hit>, q: &ParsedQuery, near: Option<(f64, f64
         cov /= n_meaningful;
         name_cov /= n_meaningful;
 
-        let mut text = cov.powi(4) * (0.55 + 0.45 * name_cov);
+        // How much of the name the query accounts for: "louisville" fully
+        // explains the city "Louisville" but only a sliver of "ProRehab
+        // Physical Therapy - South Lousville". Concise matches rank higher.
+        let query_toks: Vec<&str> = q.meaningful.iter().map(|&i| q.tokens[i].as_str()).collect();
+        let name_meaningful: Vec<&str> = name_tokens.iter().copied().filter(|t| !is_stop_word(t)).collect();
+        let completeness = if name_meaningful.is_empty() {
+            0.0
+        } else {
+            name_meaningful
+                .iter()
+                .map(|nt| token_match(nt, false, &query_toks).max(
+                    // the word being typed may be a prefix of a name word
+                    if !q.ends_with_space && q.tokens.last().is_some_and(|l| nt.starts_with(l.as_str())) { 0.97 } else { 0.0 },
+                ))
+                .sum::<f64>()
+                / name_meaningful.len() as f64
+        };
+        let mut text = cov.powi(4) * (0.55 + 0.45 * name_cov) + 0.35 * completeness * cov;
         if name_norm == q.joined {
             text += 0.6;
         } else if name_norm.starts_with(&q.joined) {
@@ -229,7 +282,14 @@ pub(crate) fn rerank(mut hits: Vec<Hit>, q: &ParsedQuery, near: Option<(f64, f64
         let mut num_factor = 1.0;
         if let Some(num) = &q.house_number {
             match h.kind.as_str() {
-                "address" if &h.number == num => num_factor = 2.2,
+                // The right number on the wrong street is not the address
+                // asked for: the boost scales with how much else matches.
+                "address" if &h.number == num => {
+                    num_factor = 1.0 + 1.2 * cov.powi(4);
+                    if h.approximate {
+                        num_factor *= 0.85; // estimated position ranks just below a real one
+                    }
+                }
                 "address" => num_factor = 0.35,
                 "street" => {
                     num_factor = 0.9;
@@ -242,7 +302,15 @@ pub(crate) fn rerank(mut hits: Vec<Hit>, q: &ParsedQuery, near: Option<(f64, f64
 
         // Category searches ("coffee", "gas") are about what is close by;
         // named searches can reach further.
-        let category_intent = name_cov < 0.5 && cov >= 0.75 && !is_area(&h.kind);
+        let matches_category = matches_cat(h);
+        let category_intent = !is_area(&h.kind) && (matches_category || (name_cov < 0.5 && cov >= 0.75));
+        let related = cat_tokens_of(h).iter().any(|t| family.contains(t));
+        let off_category = category_query && !matches_category && !related && name_norm != q.joined;
+        if category_query && matches_category {
+            // A Speedway is as much a "gas station" as "Bob's Gas Station":
+            // the name doesn't matter, distance decides.
+            text = cov.powi(4) + 0.35 * cov;
+        }
         let mut dist_factor = 1.0;
         if let Some((lat, lon)) = near {
             let d = haversine_km(lat, lon, h.lat, h.lon);
@@ -258,16 +326,61 @@ pub(crate) fn rerank(mut hits: Vec<Hit>, q: &ParsedQuery, near: Option<(f64, f64
             };
             // When every word of the query matches (e.g. it names the city),
             // the user has said where they mean; distance matters less.
-            if !category_intent && cov >= 0.97 && q.meaningful.len() >= 2 {
+            // When the query names this result's town ("... cleveland"),
+            // the user has said where they mean; distance matters less.
+            let town = h.label.rsplit(", ").nth(1).unwrap_or("");
+            let town = if h.kind == "address" || h.kind == "street" {
+                h.label.split(", ").next().unwrap_or("")
+            } else {
+                town
+            };
+            let town_tokens = normalize::tokens(town);
+            let names_town = !town_tokens.is_empty()
+                && town_tokens.iter().all(|t| q.tokens.contains(t))
+                && q.meaningful.len() > town_tokens.len();
+            if !category_intent && (names_town || (cov >= 0.97 && q.meaningful.len() >= 2 && h.kind == "place")) {
                 scale *= 8.0;
             }
             dist_factor = 1.0 / (1.0 + d / scale).powf(0.8);
         }
 
-        let imp = 0.6 + 0.6 * h.importance;
+        // For towns and cities, size matters more than for businesses:
+        // "columbus" should find Columbus, Ohio before Columbus, Indiana.
+        // "East 9th St" asked, "West 9th St" found: a different street.
+        if matches!(h.kind.as_str(), "address" | "street") {
+            fn is_dir(t: &str) -> bool {
+                matches!(t, "north" | "south" | "east" | "west" | "northeast" | "northwest" | "southeast" | "southwest")
+            }
+            let q_dirs: Vec<&str> = q.tokens.iter().map(|t| t.as_ref()).filter(|t: &&str| is_dir(t)).collect();
+            if !q_dirs.is_empty() {
+                let d_dirs: Vec<&str> = name_tokens.iter().copied().filter(|t| is_dir(t)).collect();
+                if !d_dirs.is_empty() && !d_dirs.iter().any(|d| q_dirs.contains(d)) {
+                    num_factor *= 0.5;
+                }
+            }
+        }
+        let imp = if is_area(&h.kind) {
+            0.3 + 1.2 * h.importance * h.importance
+        } else {
+            0.6 + 0.6 * h.importance
+        };
         let mut score = text * num_factor * dist_factor * kind_weight(&h.kind) * imp;
+        if off_category {
+            score *= 0.4;
+        }
+        // Real venues nearly always carry a street address; copies that
+        // only say "Mason, OH" are often misplaced duplicates.
+        if h.kind == "place" && !h.label.starts_with(|c: char| c.is_ascii_digit()) {
+            score *= 0.8;
+        }
         if cov < 0.6 {
             score = 0.0;
+        }
+        if debug {
+            eprintln!(
+                "{:<40.40} cov={cov:.2} name={name_cov:.2} compl={completeness:.2} text={text:.2} cat={matches_category} intent={category_intent} off={off_category} dist={dist_factor:.2} imp={imp:.2} -> {score:.3}",
+                h.name
+            );
         }
         h.score = score;
     }
