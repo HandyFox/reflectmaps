@@ -1,39 +1,106 @@
 # ReflectMaps
 
 An offline maps app for Windows, macOS and Linux. Download the states you
-need once; search, browse and plan driving routes with no internet
-connection.
+need once; then browse the map, search places and addresses, and plan
+driving routes with no internet connection.
 
-Work in progress. The first test build covers **Ohio** and **Kentucky**.
+The first test build covers **Ohio** and **Kentucky**.
 
-## What is in this repository
+## Install
+
+Download the installer for your system from the newest `v*` release on the
+[Releases page](https://github.com/HandyFox/reflectmaps/releases):
+
+| System | File |
+| --- | --- |
+| Windows 10/11 | `ReflectMaps_*_x64-setup.exe` (or the `.msi`) |
+| macOS 14+ (Apple Silicon) | `ReflectMaps_*_aarch64.dmg`. Not notarized yet: right-click the app and choose Open the first time |
+| Linux | `.AppImage` (any distribution), `.deb` (Ubuntu/Debian) or `.rpm` (Fedora) |
+
+Open the app, go to **Downloads** and download a state. After that,
+everything works with the internet off.
+
+## What it does
+
+- **Map**: street map with light and dark styles, offline from the first
+  launch (a world overview ships in the installer; states add full detail).
+- **Search**: businesses, addresses, streets, cities, counties, ZIP codes and
+  coordinates, with autocomplete, typo tolerance and ranking by distance from
+  the map view. Category words ("coffee", "gas", "pharmacy") find the nearest
+  places of that kind. A house number missing from the data is estimated from
+  its neighbors on the street and marked *approximate*.
+- **Directions**: driving routes with alternatives (fastest, other routes,
+  shortest, no highways), avoid tolls, highways or ferries, extra stops,
+  turn-by-turn steps, printing.
+- **Downloads**: pick states; each has map, search and directions parts that
+  download, verify and update separately. Packs can also be imported from a
+  file for computers without internet.
+
+Search accuracy is measured on every data build against
+[`eval/cases.json`](eval/cases.json). The current Ohio + Kentucky build
+passes 57 of 59 cases in the top five results.
+
+## How it is built
+
+Everything is built on GitHub's free runners and hosted as GitHub release
+files; nothing else is hosted.
+
+| Workflow | What it does |
+| --- | --- |
+| **Data packs** (`.github/workflows/data.yml`, run from the Actions tab) | Builds map, search and routing packs for the chosen states, scores search accuracy (fails below 90%), and publishes a `data-YYYYMMDD-N` release plus `catalog.json` on the `data-current` release |
+| **App** (`.github/workflows/app.yml`, runs on every push) | Builds and tests the app on Windows, macOS and Linux. Run it with *publish* ticked, or push a `v*` tag, to publish installers |
+
+### Map packs
+
+| Part | Source | Built with |
+| --- | --- | --- |
+| Map | Protomaps basemap (OpenStreetMap) | `pmtiles extract`, cut to the state outline |
+| Search | Overture Maps places and addresses | DuckDB, then `crates/rm-search` (Tantivy) |
+| Routing | OpenStreetMap road network | Valhalla, one graph for all states, split per state so packs join at state lines |
+| US cities and ZIPs (in the installer) | Overture divisions, Census ZCTA | same search engine |
+
+To add states, add them to [`pipeline/regions.json`](pipeline/regions.json)
+and run **Data packs** with their ids.
+
+## Repository
 
 | Path | What it is |
 | --- | --- |
 | `app/` | Desktop app: Tauri 2 (Rust) with a React + MapLibre interface |
-| `crates/rm-search/` | Offline place and address search engine (Rust, Tantivy) |
-| `pipeline/` | Scripts that build the downloadable map packs |
-| `eval/` | Search test cases; the data build scores itself against them |
-| `.github/workflows/` | Data builds and app builds on GitHub's free runners |
+| `app/src-tauri/` | Rust core: tiles, packs, search, routing (Valhalla runs per request, no server) |
+| `crates/rm-search/` | Offline search engine; `rm-search-query` and `rm-search-eval` are command-line tools for it |
+| `pipeline/` | Scripts that build the downloadable packs |
+| `eval/` | Search test cases |
 
-## Map packs
+### Develop
 
-Each state has three downloadable parts, published as files on a GitHub
-release:
+```sh
+cd app
+npm ci
+node scripts/fetch-assets.mjs                      # map fonts and icons
+python scripts/fetch-resources.py --platform linux # routing engine, world map, city list (windows / macos / linux)
+npx tauri dev
+```
 
-- **Map**: street map tiles (Protomaps basemap built from OpenStreetMap)
-- **Search**: places and addresses from Overture Maps
-- **Routing**: driving road graph for Valhalla, built from OpenStreetMap
+Linux also needs `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`.
 
-The app reads `catalog.json` from the release tagged `data-current`.
-Run the **Data packs** workflow (Actions tab) to rebuild; add states in
-`pipeline/regions.json`.
+## Known limitations
+
+- No live traffic; travel times assume typical free-flow speeds.
+- No satellite view yet.
+- Overture's data contains some duplicate or misplaced business listings;
+  search shows them with their addresses so they can be told apart.
+- Estimated house numbers can be off by a block or more where the address
+  data is sparse.
+- Search takes roughly 100 to 200 ms per keystroke with two states installed.
+- Installers are not code-signed yet, so Windows SmartScreen and macOS
+  Gatekeeper will warn on first launch.
 
 ## Data sources and credit
 
 © OpenStreetMap contributors (ODbL). Overture Maps Foundation (licenses by
 source). Protomaps basemap. US Census Bureau (public domain). Routing by
-Valhalla (MIT).
+Valhalla (MIT). Map fonts: Noto Sans (SIL Open Font License).
 
 ## License
 
