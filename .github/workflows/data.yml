@@ -11,7 +11,7 @@ on:
         default: "oh,ky"
       min_pass:
         description: "Minimum search test pass rate (0 to 1) required to publish"
-        default: "0.8"
+        default: "0.9"
 
 permissions:
   contents: write
