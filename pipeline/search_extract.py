@@ -208,11 +208,20 @@ def zcta_table(con, states_parquet: Path) -> bool:
     con.execute("""
         CREATE TABLE zraw AS SELECT * FROM read_csv('zcta.txt', delim='\t', header=true, all_varchar=true)
     """)
-    cols = [c[0].strip() for c in con.execute("DESCRIBE zraw").fetchall()]
-    raw = {c.strip(): c for c in [r[0] for r in con.execute("DESCRIBE zraw").fetchall()]}
+    cols = [r[0] for r in con.execute("DESCRIBE zraw").fetchall()]
+    print(f"ZIP file columns: {cols}", file=sys.stderr)
+
+    def col(*keys):
+        for c in cols:
+            u = c.strip().lstrip("\ufeff").upper()
+            if any(k in u for k in keys):
+                return c
+        raise SystemExit(f"ZIP file has no column like {keys}: {cols}")
+
+    zip_c, lat_c, lon_c = col("GEOID", "ZCTA"), col("INTPTLAT"), col("INTPTLON")
     con.execute(f"""
-        CREATE TABLE zpts AS SELECT "{raw['GEOID']}" AS zip,
-               CAST(trim("{raw['INTPTLAT']}") AS DOUBLE) AS lat, CAST(trim("{raw['INTPTLONG']}") AS DOUBLE) AS lon
+        CREATE TABLE zpts AS SELECT right('00000' || trim("{zip_c}"), 5) AS zip,
+               CAST(trim("{lat_c}") AS DOUBLE) AS lat, CAST(trim("{lon_c}") AS DOUBLE) AS lon
         FROM zraw
     """)
     con.execute(f"CREATE TABLE us_states AS SELECT usps, name AS sname, ST_GeomFromWKB(wkb) AS geom FROM read_parquet('{states_parquet}')")
@@ -221,7 +230,7 @@ def zcta_table(con, states_parquet: Path) -> bool:
         FROM zpts z LEFT JOIN us_states s ON ST_Within(ST_Point(z.lon, z.lat), s.geom)
     """)
     n = con.execute("SELECT count(*) FROM zcta").fetchone()[0]
-    print(f"{n} ZIP areas ({len(cols)} columns)", file=sys.stderr)
+    print(f"{n} ZIP areas", file=sys.stderr)
     return True
 
 
