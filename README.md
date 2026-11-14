@@ -59,11 +59,14 @@ files; nothing else is hosted.
 | Routing | OpenStreetMap road network | Valhalla, one graph for all states, split per state so packs join at state lines |
 | US cities and ZIPs (in the installer) | Overture divisions, Census ZCTA | same search engine |
 
-Run **Data packs** with `all` to rebuild every state (about 3 to 5 hours,
+Run **Data packs** with `all` to rebuild every state (about 3.5 hours,
 mostly the national routing graph), or with a list of ids such as `oh,ky`.
 Packs over GitHub's 2 GiB file limit are published in parts and joined by
 the app. The routing graph is always built for every requested state at
-once so routes cross state lines.
+once so routes cross state lines. If only the routing job fails (for
+example a slow OpenStreetMap download), run **Routing packs**
+(`.github/workflows/routing.yml`) with the build's tag and run id: it
+rebuilds the routing packs over several jobs and publishes that build.
 
 ## Repository
 
