@@ -1,0 +1,189 @@
+name: Routing packs
+
+# Rebuilds only the routing packs for an existing data build and then
+# publishes that build. The national road graph is too big to build in one
+# 6-hour job on a free runner, so the work is spread over four jobs:
+#   osm      download the US extract and keep only what routing needs
+#   graph-a  Valhalla stages initialize..build (parse OSM, write tiles)
+#   graph-b  Valhalla stages enhance..cleanup, then split into state packs
+#   publish  write catalog.json and make the build current
+# Large intermediate files move between jobs as workflow artifacts.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Data build to finish, e.g. data-20261114-7 (its draft release must exist)"
+        required: true
+      data_run:
+        description: "Run id of the Data packs run that made that build (for its build info and pack checksums)"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: data-build
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  osm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          df -h / /mnt
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+      - name: Download OpenStreetMap
+        run: |
+          curl -fsSL --retry 5 -o /mnt/work/us.osm.pbf https://download.geofabrik.de/north-america/us-latest.osm.pbf
+          ls -la /mnt/work/us.osm.pbf
+      - name: Keep only roads, ferries, turn restrictions and boundaries
+        run: |
+          # Buildings, land use, addresses and points of interest make up
+          # most of the file and Valhalla's driving graph ignores them.
+          # Objects referenced by kept ways and relations (their nodes and
+          # member ways) are kept too, with their tags.
+          osmium tags-filter /mnt/work/us.osm.pbf \
+            w/highway w/route=ferry w/junction \
+            r/type=restriction r/type=route r/type=boundary r/boundary=administrative \
+            -o /mnt/work/routing.osm.pbf
+          rm /mnt/work/us.osm.pbf
+          ls -la /mnt/work/routing.osm.pbf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: routing-osm
+          path: /mnt/work/routing.osm.pbf
+          compression-level: 0
+          retention-days: 2
+
+  graph-a:
+    needs: osm
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyvalhalla==3.9.1
+      - uses: actions/download-artifact@v4
+        with: { name: routing-osm, path: /mnt/work }
+      - name: Build admin areas and base graph
+        run: |
+          python pipeline/valhalla_config.py /mnt/work/valhalla_tiles /mnt/work/valhalla_tiles/admins.sqlite > /mnt/work/valhalla.json
+          mkdir -p /mnt/work/valhalla_tiles && cd /mnt/work
+          python -m valhalla valhalla_build_admins -c valhalla.json routing.osm.pbf
+          python -m valhalla valhalla_build_tiles -c valhalla.json -e build routing.osm.pbf
+          du -sh valhalla_tiles; ls -la valhalla_tiles; df -h / /mnt
+      - name: Pack for the next job
+        run: |
+          cd /mnt/work
+          tar cf graph-a.tar valhalla_tiles routing.osm.pbf
+          rm -rf valhalla_tiles routing.osm.pbf
+          ls -la graph-a.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: routing-graph-a
+          path: /mnt/work/graph-a.tar
+          compression-level: 0
+          retention-days: 2
+
+  graph-b:
+    needs: graph-a
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyvalhalla==3.9.1 duckdb==1.4.*
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: build
+          run-id: ${{ inputs.data_run }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with: { name: routing-graph-a, path: /mnt/work }
+      - name: Finish graph
+        run: |
+          cd /mnt/work
+          tar xf graph-a.tar && rm graph-a.tar
+          python "$GITHUB_WORKSPACE/pipeline/valhalla_config.py" /mnt/work/valhalla_tiles /mnt/work/valhalla_tiles/admins.sqlite > valhalla.json
+          python -m valhalla valhalla_build_tiles -c valhalla.json -s enhance routing.osm.pbf
+          rm -f routing.osm.pbf
+          du -sh valhalla_tiles; df -h / /mnt
+      - name: Smoke test (Cincinnati to Louisville)
+        run: |
+          BIN=$(python -c "import valhalla,os;print(os.path.dirname(valhalla.__file__))")/bin
+          $BIN/valhalla_service /mnt/work/valhalla.json route \
+            '{"locations":[{"lat":39.1031,"lon":-84.5120},{"lat":38.2527,"lon":-85.7585}],"costing":"auto","alternates":2,"directions_options":{"units":"miles"}}' \
+            > route.json
+          python -c "import json;d=json.load(open('route.json'));s=d['trip']['summary'];print('miles',s['length'],'minutes',round(s['time']/60),'alternates',len(d.get('alternates',[])))"
+      - name: Split into state packs
+        run: |
+          python pipeline/routing_split.py --tiles /mnt/work/valhalla_tiles --build build/build.json --out dist
+          bash pipeline/meta.sh "${{ inputs.tag }}" dist/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-routing
+          path: dist/*.meta.json
+          retention-days: 2
+
+  publish:
+    needs: graph-b
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: build
+          run-id: ${{ inputs.data_run }}
+          github-token: ${{ github.token }}
+      - name: Pack checksums from the data run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "meta-*"
+          path: meta
+          merge-multiple: true
+          run-id: ${{ inputs.data_run }}
+          github-token: ${{ github.token }}
+      - name: Routing pack checksums from this run
+        uses: actions/download-artifact@v4
+        with: { name: meta-routing, path: meta }
+      - name: Catalog
+        run: python pipeline/make_catalog.py --build build/build.json --meta meta --out catalog.json
+      - name: Publish
+        run: |
+          TAG="${{ inputs.tag }}"
+          gh release upload "$TAG" catalog.json --clobber
+          gh release edit "$TAG" --draft=false --prerelease --latest=false
+          if ! gh release view data-current >/dev/null 2>&1; then
+            gh release create data-current --prerelease --latest=false --target "${{ github.sha }}" \
+              --title "Current map data" \
+              --notes "Pointer to the newest map data. The app downloads catalog.json from here."
+          fi
+          gh release upload data-current catalog.json --clobber
+      - name: Keep only the two newest data builds
+        run: |
+          gh release list --limit 100 --json tagName,createdAt,isDraft \
+            --jq '[.[] | select((.tagName | startswith("data-2")) and (.isDraft | not))] | sort_by(.createdAt) | reverse | .[2:] | .[].tagName' |
+            while read -r t; do gh release delete "$t" --yes --cleanup-tag; done
