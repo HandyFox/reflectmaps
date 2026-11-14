@@ -20,6 +20,22 @@ Download the installer for your system from the newest `v*` release on the
 Open the app, go to **Downloads** and download a state. After that,
 everything works with the internet off.
 
+### Portable version (external drive)
+
+`ReflectMaps_<version>_portable_x64.zip` runs from an external SSD or USB
+drive on any Windows 10/11 PC, with nothing installed. Unzip it onto the
+drive and double-click `ReflectMaps.exe`. Map data, settings and the web
+view's storage all live in the `ReflectMaps Data` folder next to the
+program; Microsoft's WebView2 runtime is bundled, so it also runs on PCs
+that lack it.
+
+To fill a drive: **Downloads > Download all** queues every state (about
+51 GB to download, about 100 GB installed). Downloads run two states at a
+time, can be paused, and survive closing the app or unplugging the drive.
+To hand out copies, close the app and copy the whole `ReflectMaps` folder to
+the other drive, then use **Check data** on the copy to confirm every file
+is intact. Use exFAT or NTFS drives (FAT32 can't hold some of the files).
+
 ### Computer without internet
 
 The installer itself works offline. To add states, use another computer:
@@ -55,8 +71,11 @@ state lines when all the directions packs come from the same release.
   directions, with a preview, paper size and orientation, a sharp map image,
   scale bar and north arrow. Directions print with an overview map and a
   numbered step table. Pick a PDF printer to save a PDF instead.
-- **Downloads**: pick states; each has map, search and directions parts that
-  download, verify and update separately. Packs copied from GitHub onto a
+- **Downloads**: pick states one by one or select several (or all) and
+  download them in a queue with overall progress, pause/resume and Update
+  all; each state has map, search and directions parts that download,
+  verify and update separately. **Check data** re-reads every installed file
+  against its checksum. Packs copied from GitHub onto a
   USB drive can be imported on computers without internet.
 
 Search accuracy is measured on every data build against

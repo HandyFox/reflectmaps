@@ -1,0 +1,52 @@
+ReflectMaps (portable)
+======================
+
+Offline street maps, search and driving directions for the United States.
+Everything runs from this drive: nothing is installed on the computer, and
+no internet connection is needed once the map data is on the drive.
+
+START
+  Double-click ReflectMaps.exe.
+  Works on Windows 10 and 11 (64-bit). If Windows SmartScreen says
+  "Windows protected your PC", click "More info", then "Run anyway".
+
+WHAT'S IN THIS FOLDER
+  ReflectMaps.exe      the program
+  resources\           world overview map, search and routing engines
+  WebView2\            Microsoft's web view, so the app runs even on PCs
+                       without it (do not delete)
+  ReflectMaps Data\    map data for the states, settings. Keep it next to
+                       ReflectMaps.exe: that is how the program finds it.
+
+GETTING MAP DATA
+  Open the Downloads tab. "Download all" fetches every state (about 51 GB
+  to download, about 100 GB on the drive). Downloads can be paused, and
+  continue where they stopped if the app is closed or the drive unplugged.
+  "Update all" brings states up to date when new map data is released.
+  States can also be imported from files copied off another computer.
+
+MAKING COPIES OF THIS DRIVE
+  Close ReflectMaps, then copy this whole ReflectMaps folder to the other
+  drive (drag it in File Explorer). The copy works on any PC under any
+  drive letter. Then open ReflectMaps on the copy, go to Downloads and
+  click "Check data": it reads every file and confirms the copy is intact.
+  Use drives formatted exFAT or NTFS (not FAT32), 128 GB or larger for all
+  states.
+
+MAP DATA AND CREDITS
+  Map data (c) OpenStreetMap contributors, available under the Open
+  Database License (ODbL): https://www.openstreetmap.org/copyright
+  Places and addresses from the Overture Maps Foundation
+  (https://overturemaps.org), under the CDLA Permissive 2.0 and ODbL
+  licenses. Basemap tiles from Protomaps (https://protomaps.com).
+  Routing by Valhalla. Census boundaries from the U.S. Census Bureau.
+
+  The map data on this drive is a database derived from OpenStreetMap. If
+  you share this drive, the data stays under the ODbL: recipients may use,
+  copy and share it under the same terms, and the source data and the
+  tools that built it are public at
+  https://github.com/HandyFox/reflectmaps
+
+  ReflectMaps itself is open source under the Apache License 2.0.
+  Microsoft Edge WebView2 Runtime is distributed under Microsoft's license
+  terms for the WebView2 Fixed Version runtime.

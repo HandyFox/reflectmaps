@@ -1,5 +1,8 @@
+mod check;
 mod import;
 mod packs;
+mod queue;
+mod storage;
 mod pmtiles;
 mod routing;
 mod state;
@@ -8,7 +11,7 @@ use serde::Serialize;
 use state::{AppState, Installed, Paths};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 type St<'a> = State<'a, Arc<AppState>>;
 
@@ -138,6 +141,71 @@ async fn import_packs(app: tauri::AppHandle, state: St<'_>, paths: Vec<String>) 
         .map_err(err)?
 }
 
+#[tauri::command]
+fn storage_info(state: St) -> storage::StorageInfo {
+    storage::info(&state.paths.data, state.portable)
+}
+
+#[tauri::command]
+fn queue_status(state: St) -> queue::QueueStatus {
+    state.queue.status()
+}
+
+/// Queues whole states for download (only the parts they are missing or
+/// that changed). Returns how many were queued.
+#[tauri::command]
+async fn queue_add(app: tauri::AppHandle, state: St<'_>, regions: Vec<String>) -> Result<usize, String> {
+    let cat = packs::get_catalog(state.inner(), false)
+        .await
+        .catalog
+        .ok_or("No list of states yet. Connect to the internet once.")?;
+    Ok(state.queue.add(&app, state.inner(), &cat, &regions))
+}
+
+#[tauri::command]
+fn queue_remove(app: tauri::AppHandle, state: St, regions: Vec<String>) {
+    state.queue.remove(&app, state.inner(), &regions);
+}
+
+#[tauri::command]
+fn queue_pause(app: tauri::AppHandle, state: St) {
+    state.queue.pause(&app, state.inner());
+}
+
+#[tauri::command]
+fn queue_resume(app: tauri::AppHandle, state: St) {
+    state.queue.resume(&app, state.inner());
+}
+
+#[tauri::command]
+fn queue_clear_failed(app: tauri::AppHandle, state: St) {
+    state.queue.clear_failed(&app, state.inner());
+}
+
+/// Checks every installed file; progress arrives as "check-progress" events.
+#[tauri::command]
+async fn check_data(app: tauri::AppHandle, state: St<'_>) -> Result<Vec<check::RegionCheck>, String> {
+    let st = state.inner().clone();
+    st.cancel.lock().unwrap().remove("check");
+    tokio::task::spawn_blocking(move || {
+        check::check_all(
+            &st,
+            &|p| {
+                let _ = app.emit("check-progress", p);
+            },
+            &|| st.cancel.lock().unwrap().remove("check"),
+        )
+        .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+fn cancel_check(state: St) {
+    state.cancel.lock().unwrap().insert("check".into());
+}
+
 /// Opens the system print dialog for the window. `window.print()` alone does
 /// nothing in the macOS web view, so printing goes through the native call.
 #[tauri::command]
@@ -153,22 +221,43 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    let portable = storage::portable_root();
+    if let Some(root) = &portable {
+        storage::setup_portable_env(root);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            let data = match std::env::var_os("RM_DATA_DIR") {
-                Some(d) => PathBuf::from(d),
-                None => app.path().app_local_data_dir()?.join("data"),
+        .setup(move |app| {
+            let data = match (std::env::var_os("RM_DATA_DIR"), &portable) {
+                (Some(d), _) => PathBuf::from(d),
+                (None, Some(root)) => root.join(storage::PORTABLE_DATA),
+                (None, None) => app.path().app_local_data_dir()?.join("data"),
             };
-            let resources = match std::env::var_os("RM_RESOURCE_DIR") {
-                Some(d) => PathBuf::from(d),
-                None => app.path().resource_dir()?.join("resources"),
+            let resources = match (std::env::var_os("RM_RESOURCE_DIR"), &portable) {
+                (Some(d), _) => PathBuf::from(d),
+                (None, Some(root)) => root.join("resources"),
+                (None, None) => app.path().resource_dir()?.join("resources"),
             };
-            let state = Arc::new(AppState::new(Paths { data, resources }));
+            let mut st = AppState::new(Paths { data: data.clone(), resources });
+            st.portable = portable.is_some();
+            let state = Arc::new(st);
             state.load();
+            state.queue.load(&state);
             routing::refresh(&state);
             app.manage(state);
+
+            // The window is made here so a portable copy keeps the web view's
+            // storage (settings, saved map view) on its own drive.
+            let cfg = app.config().app.windows.first().cloned().ok_or("no window in tauri.conf.json")?;
+            let mut win = tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
+            if portable.is_some() {
+                win = win.data_directory(data.join("webview"));
+            }
+            win.build()?;
+
+            tauri::async_runtime::spawn(queue::Queue::run(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -182,7 +271,16 @@ pub fn run() {
             cancel_install,
             remove_region,
             import_packs,
-            print_page
+            print_page,
+            storage_info,
+            queue_status,
+            queue_add,
+            queue_remove,
+            queue_pause,
+            queue_resume,
+            queue_clear_failed,
+            check_data,
+            cancel_check
         ])
         .run(tauri::generate_context!())
         .expect("error while running ReflectMaps");

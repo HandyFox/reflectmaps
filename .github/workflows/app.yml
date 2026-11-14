@@ -75,13 +75,57 @@ jobs:
       - name: Build installers
         working-directory: app
         run: npx tauri build
+      - name: Portable zip (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          P=portable/ReflectMaps
+          mkdir -p "$P/ReflectMaps Data"
+          cp target/release/reflectmaps.exe "$P/ReflectMaps.exe"
+          cp -r app/src-tauri/resources "$P/resources"
+          python app/scripts/fetch-webview2.py "$P/WebView2"
+          cp "app/portable/READ ME FIRST.txt" "$P/"
+          cp LICENSE "$P/LICENSE.txt"
+          printf 'Map data and settings for this portable copy of ReflectMaps.\r\nKeep this folder next to ReflectMaps.exe.\r\n' > "$P/ReflectMaps Data/about this folder.txt"
+          du -sh "$P"/*
+      - name: Check the portable copy starts
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $dir = Resolve-Path portable/ReflectMaps
+          $p = Start-Process -FilePath "$dir/ReflectMaps.exe" -WorkingDirectory $env:TEMP -PassThru
+          Start-Sleep -Seconds 25
+          $alive = -not $p.HasExited
+          $wvProcs = Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -Unique
+          Write-Host "web view processes: $wvProcs"
+          $fixed = [bool]($wvProcs | Where-Object { $_ -like "$dir*" })
+          Write-Host "uses the bundled WebView2: $fixed"
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          Get-ChildItem "$dir/ReflectMaps Data" | Format-Table Name
+          $wv = Test-Path "$dir/ReflectMaps Data/webview"
+          Write-Host "still running: $alive, web view data on the drive: $wv"
+          if (-not $alive -or -not $wv) { throw "portable copy did not start properly" }
+          if ((Test-Path "$dir/WebView2/msedgewebview2.exe") -and -not $fixed) { throw "the bundled WebView2 runtime was not used" }
+          # leave the folder clean for the zip
+          Get-ChildItem "$dir/ReflectMaps Data" -Exclude "about this folder.txt" | Remove-Item -Recurse -Force
+          Remove-Item "$dir/WebView2/.reflectmaps-acl" -ErrorAction SilentlyContinue
+      - name: Zip the portable copy
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          (cd portable && 7z a -tzip -mx=5 "../ReflectMaps_${VERSION}_portable_x64.zip" ReflectMaps >/dev/null)
+          ls -la ReflectMaps_*_portable_x64.zip
       - name: Collect installers
         shell: bash
         run: |
           mkdir -p out
           B=target/release/bundle
           case "${{ matrix.platform }}" in
-            windows) cp $B/msi/*.msi $B/nsis/*.exe out/ ;;
+            windows) cp $B/msi/*.msi $B/nsis/*.exe ReflectMaps_*_portable_x64.zip out/ ;;
             macos)   cp $B/dmg/*.dmg out/ ;;
             linux)   cp $B/deb/*.deb $B/appimage/*.AppImage $B/rpm/*.rpm out/ ;;
           esac
@@ -113,10 +157,11 @@ jobs:
 
           **Install**
           - Windows: \`ReflectMaps_*_x64-setup.exe\` (or the .msi)
+          - Windows, portable (runs from an external drive, nothing installed): \`ReflectMaps_*_portable_x64.zip\`. Unzip it onto the drive and open \`READ ME FIRST.txt\`.
           - macOS 14+ on Apple Silicon: the .dmg. The app is not notarized yet: right-click it and choose Open the first time.
           - Linux: the .AppImage (any distribution), .deb (Ubuntu/Debian) or .rpm (Fedora)
 
-          Then open **Downloads** in the app and download Ohio or Kentucky. After that, everything works with the internet off.
+          Then open **Downloads** in the app and download the states you need (or all of them). After that, everything works with the internet off.
           EOF
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" out/* --clobber

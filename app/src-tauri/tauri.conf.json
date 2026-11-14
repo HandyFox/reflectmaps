@@ -15,7 +15,8 @@
         "width": 1320,
         "height": 840,
         "minWidth": 820,
-        "minHeight": 560
+        "minHeight": 560,
+        "create": false
       }
     ],
     "security": {
@@ -28,7 +29,7 @@
     "category": "Travel",
     "shortDescription": "Offline maps, search and directions",
     "longDescription": "ReflectMaps works without an internet connection: download the states you need, then browse, search places and addresses, and plan driving routes offline.",
-    "copyright": "ReflectMaps contributors. Map data © OpenStreetMap contributors, Overture Maps Foundation.",
+    "copyright": "ReflectMaps contributors. Map data \u00a9 OpenStreetMap contributors, Overture Maps Foundation.",
     "license": "Apache-2.0",
     "icon": [
       "icons/32x32.png",
@@ -37,9 +38,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/**/*"],
+    "resources": [
+      "resources/**/*"
+    ],
     "windows": {
-      "webviewInstallMode": { "type": "downloadBootstrapper" }
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
     },
     "macOS": {
       "minimumSystemVersion": "14.0"

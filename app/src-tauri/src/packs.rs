@@ -285,6 +285,7 @@ pub fn install_file(
             let _ = std::fs::remove_dir_all(&dest);
             std::fs::rename(&inner, &dest)?;
             let _ = std::fs::remove_dir_all(&tmp);
+            crate::check::write_manifest(state, region_id, "search", std::slice::from_ref(&dest))?;
             state.search.write().unwrap().add_index(&format!("{region_id}-search"), &dest)?;
             comp.path = rel(&paths.data, &dest);
         }
@@ -304,6 +305,8 @@ pub fn install_file(
                 std::fs::rename(&src, &dst).or_else(|_| std::fs::copy(&src, &dst).map(|_| ()))?;
             }
             let _ = std::fs::remove_dir_all(&tmp);
+            let files: Vec<PathBuf> = tiles.iter().map(|t| paths.routing_tiles().join(t)).collect();
+            crate::check::write_manifest(state, region_id, "routing", &files)?;
             comp.graph_build = manifest["graph_build"].as_str().unwrap_or_default().to_string();
             comp.tiles = tiles;
             comp.path = rel(&paths.data, &paths.routing_tiles());
@@ -341,12 +344,22 @@ pub async fn install(app: AppHandle, region_id: String, components: Vec<String>)
             bail!("already downloading");
         }
     }
-    let result = install_inner(&app, &state, &region_id, &components).await;
+    let result = install_inner(&app, &state, &region_id, &components, true).await;
     state.busy.lock().unwrap().remove(&region_id);
     result
 }
 
-async fn install_inner(app: &AppHandle, state: &Arc<AppState>, region_id: &str, components: &[String]) -> Result<()> {
+/// Downloads and installs parts of one state. With `bring_routing_along`, a
+/// directions update also updates the other installed states' directions
+/// (they only join up at borders when built together); the download queue
+/// passes false because it queues those states itself.
+pub(crate) async fn install_inner(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    region_id: &str,
+    components: &[String],
+    bring_routing_along: bool,
+) -> Result<()> {
     let cat = get_catalog(state, false).await.catalog.ok_or_else(|| anyhow!("no catalog; connect to the internet once"))?;
     let region = cat
         .regions
@@ -357,7 +370,7 @@ async fn install_inner(app: &AppHandle, state: &Arc<AppState>, region_id: &str, 
     // Routing packs only fit together when they come from the same graph
     // build, so a routing update brings the other installed routing packs along.
     let mut work: Vec<(CatalogRegion, String)> = components.iter().map(|k| (region.clone(), k.clone())).collect();
-    if components.iter().any(|k| k == "routing") {
+    if bring_routing_along && components.iter().any(|k| k == "routing") {
         let inst = state.installed.lock().unwrap().clone();
         for (id, r) in &inst.regions {
             if id == region_id {
@@ -442,6 +455,7 @@ pub fn remove(state: &AppState, region_id: &str) -> Result<()> {
         .flat_map(|c| c.tiles.clone())
         .collect();
     for (kind, c) in &r.components {
+        crate::check::remove_manifest(state, region_id, kind);
         if kind == "routing" {
             for t in &c.tiles {
                 if !still_used.contains(t) {

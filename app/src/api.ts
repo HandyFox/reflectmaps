@@ -97,6 +97,30 @@ export type ImportReport = {
   first_region?: string | null;
 };
 
+export type QueueStatus = {
+  items: string[];
+  active: string[];
+  paused: boolean;
+  failed: Record<string, string>;
+  batch_total: number;
+  batch_done: number;
+  batch_states: number;
+  batch_states_done: number;
+  note?: string | null;
+};
+
+export type StorageInfo = {
+  data_dir: string;
+  portable: boolean;
+  free?: number | null;
+  total?: number | null;
+  file_system?: string | null;
+  warning?: string | null;
+};
+
+export type CheckProgress = { done: number; total: number; region: string };
+export type RegionCheck = { region: string; name: string; status: "ok" | "damaged" | "unchecked"; problems: string[] };
+
 export type RouteRequest = {
   locations: { lat: number; lon: number }[];
   avoid_tolls: boolean;
@@ -116,6 +140,20 @@ export const api = {
   cancel: (region: string) => invoke<void>("cancel_install", { region }),
   remove: (region: string) => invoke<void>("remove_region", { region }),
   importPacks: (paths: string[]) => invoke<ImportReport>("import_packs", { paths }),
+  storage: () => invoke<StorageInfo>("storage_info"),
+  queue: () => invoke<QueueStatus>("queue_status"),
+  queueAdd: (regions: string[]) => invoke<number>("queue_add", { regions }),
+  queueRemove: (regions: string[]) => invoke<void>("queue_remove", { regions }),
+  queuePause: () => invoke<void>("queue_pause"),
+  queueResume: () => invoke<void>("queue_resume"),
+  queueClearFailed: () => invoke<void>("queue_clear_failed"),
+  checkData: () => invoke<RegionCheck[]>("check_data"),
+  cancelCheck: () => invoke<void>("cancel_check"),
+  onQueue: (cb: (q: QueueStatus) => void): Promise<UnlistenFn> => listen<QueueStatus>("queue", (e) => cb(e.payload)),
+  onPacksChanged: (cb: (region: string) => void): Promise<UnlistenFn> =>
+    listen<string>("packs-changed", (e) => cb(e.payload)),
+  onCheckProgress: (cb: (p: CheckProgress) => void): Promise<UnlistenFn> =>
+    listen<CheckProgress>("check-progress", (e) => cb(e.payload)),
   onProgress: (cb: (p: Progress) => void): Promise<UnlistenFn> =>
     listen<Progress>("pack-progress", (e) => cb(e.payload)),
 };

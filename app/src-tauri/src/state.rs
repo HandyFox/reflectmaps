@@ -64,6 +64,12 @@ impl Paths {
     pub fn catalog_cache(&self) -> PathBuf {
         self.data.join("catalog.json")
     }
+    pub fn queue_file(&self) -> PathBuf {
+        self.data.join("queue.json")
+    }
+    pub fn manifests(&self) -> PathBuf {
+        self.data.join("manifests")
+    }
     pub fn ensure(&self) -> Result<()> {
         for d in [self.maps(), self.search(), self.routing_tiles(), self.downloads()] {
             std::fs::create_dir_all(d)?;
@@ -82,6 +88,9 @@ pub struct AppState {
     pub busy: Mutex<HashSet<String>>,
     pub routing: Mutex<Option<crate::routing::Valhalla>>,
     pub routing_error: Mutex<Option<String>>,
+    /// Running from an external drive with its data next to the program.
+    pub portable: bool,
+    pub queue: crate::queue::Queue,
 }
 
 impl AppState {
@@ -95,6 +104,8 @@ impl AppState {
             busy: Mutex::new(HashSet::new()),
             routing: Mutex::new(None),
             routing_error: Mutex::new(None),
+            portable: false,
+            queue: Default::default(),
         }
     }
 
