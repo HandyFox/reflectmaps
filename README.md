@@ -4,7 +4,7 @@ An offline maps app for Windows, macOS and Linux. Download the states you
 need once; then browse the map, search places and addresses, and plan
 driving routes with no internet connection.
 
-The first test build covers **Ohio** and **Kentucky**.
+Map data covers **all 50 states and Washington, DC**. Each state downloads separately.
 
 ## Install
 
@@ -38,7 +38,7 @@ everything works with the internet off.
 
 Search accuracy is measured on every data build against
 [`eval/cases.json`](eval/cases.json). The current Ohio + Kentucky build
-passes 57 of 59 cases in the top five results.
+passes 58 of 59 cases in the top five results.
 
 ## How it is built
 
@@ -59,8 +59,11 @@ files; nothing else is hosted.
 | Routing | OpenStreetMap road network | Valhalla, one graph for all states, split per state so packs join at state lines |
 | US cities and ZIPs (in the installer) | Overture divisions, Census ZCTA | same search engine |
 
-To add states, add them to [`pipeline/regions.json`](pipeline/regions.json)
-and run **Data packs** with their ids.
+Run **Data packs** with `all` to rebuild every state (about 3 to 5 hours,
+mostly the national routing graph), or with a list of ids such as `oh,ky`.
+Packs over GitHub's 2 GiB file limit are published in parts and joined by
+the app. The routing graph is always built for every requested state at
+once so routes cross state lines.
 
 ## Repository
 
