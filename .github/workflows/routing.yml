@@ -23,7 +23,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: data-build
+  group: routing-build
   cancel-in-progress: false
 
 env:
