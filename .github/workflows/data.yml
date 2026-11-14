@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       regions:
-        description: "States to build (ids from pipeline/regions.json, comma separated)"
+        description: "States to build: ids from pipeline/regions.json, comma separated, or all"
         default: "oh,ky"
       min_pass:
         description: "Minimum search test pass rate (0 to 1) required to publish"
@@ -84,8 +84,7 @@ jobs:
           pmtiles show "dist/${{ matrix.region }}-map.pmtiles" | head -20
       - name: Upload
         run: |
-          bash pipeline/meta.sh dist/*.pmtiles
-          gh release upload "${{ needs.prepare.outputs.tag }}" dist/*.pmtiles --clobber
+          bash pipeline/meta.sh "${{ needs.prepare.outputs.tag }}" dist/*.pmtiles
       - uses: actions/upload-artifact@v4
         with:
           name: meta-map-${{ matrix.region }}
@@ -106,8 +105,7 @@ jobs:
           mkdir -p dist
           pmtiles extract "https://build.protomaps.com/${{ needs.prepare.outputs.protomaps }}.pmtiles" \
             dist/world-base.pmtiles --maxzoom=6 --download-threads=4
-          bash pipeline/meta.sh dist/world-base.pmtiles
-          gh release upload "${{ needs.prepare.outputs.tag }}" dist/world-base.pmtiles --clobber
+          bash pipeline/meta.sh "${{ needs.prepare.outputs.tag }}" dist/world-base.pmtiles
       - uses: actions/upload-artifact@v4
         with:
           name: meta-world
@@ -117,12 +115,17 @@ jobs:
   search:
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         region: ${{ fromJSON(needs.prepare.outputs.regions) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h / /mnt
       - uses: actions/download-artifact@v4
         with: { name: build, path: build }
       - uses: actions/setup-python@v5
@@ -137,8 +140,7 @@ jobs:
           build/bin/rm-search-build records.ndjson "index/${{ matrix.region }}-search"
           mkdir -p dist
           tar czf "dist/${{ matrix.region }}-search.tar.gz" -C index "${{ matrix.region }}-search"
-          bash pipeline/meta.sh dist/*.tar.gz
-          gh release upload "${{ needs.prepare.outputs.tag }}" dist/*.tar.gz --clobber
+          bash pipeline/meta.sh "${{ needs.prepare.outputs.tag }}" dist/*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: meta-search-${{ matrix.region }}
@@ -164,8 +166,7 @@ jobs:
           build/bin/rm-search-build areas.ndjson index/us-areas
           mkdir -p dist
           tar czf dist/us-areas.tar.gz -C index us-areas
-          bash pipeline/meta.sh dist/us-areas.tar.gz
-          gh release upload "${{ needs.prepare.outputs.tag }}" dist/us-areas.tar.gz --clobber
+          bash pipeline/meta.sh "${{ needs.prepare.outputs.tag }}" dist/us-areas.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: meta-areas
@@ -175,8 +176,14 @@ jobs:
   routing:
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h / /mnt
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
       - uses: actions/download-artifact@v4
         with: { name: build, path: build }
       - uses: actions/setup-python@v5
@@ -185,26 +192,32 @@ jobs:
       - run: |
           pip install pyvalhalla==3.9.1 duckdb==1.4.*
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
-      - name: Download OpenStreetMap extracts
+      - name: Download OpenStreetMap
         run: |
-          mkdir -p osm
-          python - <<'EOF' > osm/urls.txt
+          n=$(python -c "import json;print(len(json.load(open('build/build.json'))['regions']))")
+          if [ "$n" -gt 8 ]; then
+            # Many states: one whole-US extract, no merging needed.
+            curl -fsSL --retry 5 -o /mnt/work/merged.osm.pbf https://download.geofabrik.de/north-america/us-latest.osm.pbf
+          else
+            mkdir -p /mnt/work/osm
+            python - <<'EOF' > /mnt/work/osm/urls.txt
           import json
           for r in json.load(open("build/build.json"))["regions"]:
               print(f"https://download.geofabrik.de/{r['geofabrik']}-latest.osm.pbf")
           EOF
-          cd osm && while read -r u; do curl -fsSL --retry 3 -O "$u"; done < urls.txt && ls -la
-      - name: Merge
-        run: |
-          n=$(ls osm/*.osm.pbf | wc -l)
-          if [ "$n" -gt 1 ]; then osmium merge osm/*.osm.pbf -o merged.osm.pbf; else cp osm/*.osm.pbf merged.osm.pbf; fi
-          ls -la merged.osm.pbf
+            (cd /mnt/work/osm && while read -r u; do curl -fsSL --retry 3 -O "$u"; done < urls.txt)
+            if [ "$n" -gt 1 ]; then osmium merge /mnt/work/osm/*.osm.pbf -o /mnt/work/merged.osm.pbf; else cp /mnt/work/osm/*.osm.pbf /mnt/work/merged.osm.pbf; fi
+            rm -rf /mnt/work/osm
+          fi
+          ls -la /mnt/work/merged.osm.pbf; df -h / /mnt
       - name: Build routing graph
         run: |
-          python pipeline/valhalla_config.py "$PWD/valhalla_tiles" "$PWD/admins.sqlite" > valhalla.json
+          python pipeline/valhalla_config.py /mnt/work/valhalla_tiles /mnt/work/admins.sqlite > valhalla.json
+          cp valhalla.json /mnt/work/ && cd /mnt/work
           python -m valhalla valhalla_build_admins -c valhalla.json merged.osm.pbf
           python -m valhalla valhalla_build_tiles -c valhalla.json merged.osm.pbf
-          du -sh valhalla_tiles
+          rm -f merged.osm.pbf
+          du -sh valhalla_tiles; df -h / /mnt
       - name: Smoke test (Cincinnati to Louisville)
         run: |
           BIN=$(python -c "import valhalla,os;print(os.path.dirname(valhalla.__file__))")/bin
@@ -214,9 +227,8 @@ jobs:
           python -c "import json;d=json.load(open('route.json'));s=d['trip']['summary'];print('miles',s['length'],'minutes',round(s['time']/60),'alternates',len(d.get('alternates',[])))"
       - name: Split into state packs
         run: |
-          python pipeline/routing_split.py --tiles valhalla_tiles --build build/build.json --out dist
-          bash pipeline/meta.sh dist/*.tar.gz
-          gh release upload "${{ needs.prepare.outputs.tag }}" dist/*.tar.gz --clobber
+          python pipeline/routing_split.py --tiles /mnt/work/valhalla_tiles --build build/build.json --out dist
+          bash pipeline/meta.sh "${{ needs.prepare.outputs.tag }}" dist/*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: meta-routing
@@ -225,6 +237,7 @@ jobs:
 
   eval:
     needs: [prepare, search, areas]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -234,8 +247,13 @@ jobs:
         run: |
           chmod +x build/bin/*
           mkdir -p packs && cd packs
-          gh release download "${{ needs.prepare.outputs.tag }}" --pattern '*-search.tar.gz' --pattern 'us-areas.tar.gz'
-          for f in *.tar.gz; do tar xzf "$f"; done
+          # The test cases cover Ohio and Kentucky; download only those packs
+          # (plus the US cities list), joining any that were split in parts.
+          for f in oh-search.tar.gz ky-search.tar.gz us-areas.tar.gz; do
+            gh release download "${{ needs.prepare.outputs.tag }}" --pattern "$f" --pattern "$f.part*" || true
+            if ls "$f".part* >/dev/null 2>&1; then cat "$f".part* > "$f" && rm "$f".part*; fi
+            [ -f "$f" ] && tar xzf "$f" && rm "$f"
+          done
           cd ..
           dirs=$(ls -d packs/*/)
           set -o pipefail
@@ -246,6 +264,9 @@ jobs:
 
   publish:
     needs: [prepare, map, world, search, areas, routing, eval]
+    # Publish the states that built even if a few failed; the catalog lists
+    # only complete states. Search accuracy must still pass.
+    if: ${{ !cancelled() && needs.eval.result == 'success' && needs.world.result == 'success' && needs.areas.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

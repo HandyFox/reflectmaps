@@ -31,6 +31,10 @@ def main():
     for p in Path(args.meta).rglob("*.meta.json"):
         m = json.loads(p.read_text())
         m["url"] = f"{base_url}/{m['file']}"
+        for part in m.get("parts", []):
+            part["url"] = f"{base_url}/{part['file']}"
+        if m.get("parts"):
+            m["url"] = m["parts"][0]["url"]
         files[m["file"]] = m
 
     def comp(name, kind):
@@ -70,10 +74,20 @@ def main():
         "attribution": ATTRIBUTION,
     }
     Path(args.out).write_text(json.dumps(catalog, indent=2))
-    missing = [f"{r['id']}:{k}" for r in regions for k in ("map", "search", "routing") if k not in r["components"]]
-    print(json.dumps(catalog, indent=2))
-    if missing:
-        raise SystemExit(f"catalog is missing components: {missing}")
+    # A state is listed only when all three of its packs built.
+    incomplete = [r for r in regions if len(r["components"]) < 3]
+    catalog["regions"] = [r for r in regions if len(r["components"]) == 3]
+    Path(args.out).write_text(json.dumps(catalog, indent=2))
+    print(f"{len(catalog['regions'])} complete regions")
+    for r in incomplete:
+        have = ", ".join(r["components"]) or "nothing"
+        print(f"::warning::{r['name']} left out of the catalog (built: {have})")
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a") as f:
+                f.write(f"- {r['name']} left out (built: {have})\n")
+    if not catalog["regions"]:
+        raise SystemExit("no complete regions")
 
 
 if __name__ == "__main__":

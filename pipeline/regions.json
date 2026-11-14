@@ -1,21 +1,362 @@
 {
-  "comment": "Regions the data workflow can build. id = USPS code in lower case. bbox = [west, south, east, north]; it only pre-filters data, the Census state outline decides what belongs to a state.",
+  "comment": "Regions the data workflow can build: the 50 states and DC. id = USPS code in lower case. Run the workflow with regions=all to build every one. The bounding box is computed from the Census state outline during prepare.",
   "regions": [
     {
-      "id": "oh",
-      "name": "Ohio",
-      "usps": "OH",
-      "fips": "39",
-      "bbox": [-84.83, 38.40, -80.51, 42.00],
-      "geofabrik": "north-america/us/ohio"
+      "id": "al",
+      "name": "Alabama",
+      "usps": "AL",
+      "fips": "01",
+      "geofabrik": "north-america/us/alabama"
+    },
+    {
+      "id": "ak",
+      "name": "Alaska",
+      "usps": "AK",
+      "fips": "02",
+      "geofabrik": "north-america/us/alaska"
+    },
+    {
+      "id": "az",
+      "name": "Arizona",
+      "usps": "AZ",
+      "fips": "04",
+      "geofabrik": "north-america/us/arizona"
+    },
+    {
+      "id": "ar",
+      "name": "Arkansas",
+      "usps": "AR",
+      "fips": "05",
+      "geofabrik": "north-america/us/arkansas"
+    },
+    {
+      "id": "ca",
+      "name": "California",
+      "usps": "CA",
+      "fips": "06",
+      "geofabrik": "north-america/us/california"
+    },
+    {
+      "id": "co",
+      "name": "Colorado",
+      "usps": "CO",
+      "fips": "08",
+      "geofabrik": "north-america/us/colorado"
+    },
+    {
+      "id": "ct",
+      "name": "Connecticut",
+      "usps": "CT",
+      "fips": "09",
+      "geofabrik": "north-america/us/connecticut"
+    },
+    {
+      "id": "de",
+      "name": "Delaware",
+      "usps": "DE",
+      "fips": "10",
+      "geofabrik": "north-america/us/delaware"
+    },
+    {
+      "id": "dc",
+      "name": "District of Columbia",
+      "usps": "DC",
+      "fips": "11",
+      "geofabrik": "north-america/us/district-of-columbia"
+    },
+    {
+      "id": "fl",
+      "name": "Florida",
+      "usps": "FL",
+      "fips": "12",
+      "geofabrik": "north-america/us/florida"
+    },
+    {
+      "id": "ga",
+      "name": "Georgia",
+      "usps": "GA",
+      "fips": "13",
+      "geofabrik": "north-america/us/georgia"
+    },
+    {
+      "id": "hi",
+      "name": "Hawaii",
+      "usps": "HI",
+      "fips": "15",
+      "geofabrik": "north-america/us/hawaii"
+    },
+    {
+      "id": "id",
+      "name": "Idaho",
+      "usps": "ID",
+      "fips": "16",
+      "geofabrik": "north-america/us/idaho"
+    },
+    {
+      "id": "il",
+      "name": "Illinois",
+      "usps": "IL",
+      "fips": "17",
+      "geofabrik": "north-america/us/illinois"
+    },
+    {
+      "id": "in",
+      "name": "Indiana",
+      "usps": "IN",
+      "fips": "18",
+      "geofabrik": "north-america/us/indiana"
+    },
+    {
+      "id": "ia",
+      "name": "Iowa",
+      "usps": "IA",
+      "fips": "19",
+      "geofabrik": "north-america/us/iowa"
+    },
+    {
+      "id": "ks",
+      "name": "Kansas",
+      "usps": "KS",
+      "fips": "20",
+      "geofabrik": "north-america/us/kansas"
     },
     {
       "id": "ky",
       "name": "Kentucky",
       "usps": "KY",
       "fips": "21",
-      "bbox": [-89.58, 36.49, -81.96, 39.15],
       "geofabrik": "north-america/us/kentucky"
+    },
+    {
+      "id": "la",
+      "name": "Louisiana",
+      "usps": "LA",
+      "fips": "22",
+      "geofabrik": "north-america/us/louisiana"
+    },
+    {
+      "id": "me",
+      "name": "Maine",
+      "usps": "ME",
+      "fips": "23",
+      "geofabrik": "north-america/us/maine"
+    },
+    {
+      "id": "md",
+      "name": "Maryland",
+      "usps": "MD",
+      "fips": "24",
+      "geofabrik": "north-america/us/maryland"
+    },
+    {
+      "id": "ma",
+      "name": "Massachusetts",
+      "usps": "MA",
+      "fips": "25",
+      "geofabrik": "north-america/us/massachusetts"
+    },
+    {
+      "id": "mi",
+      "name": "Michigan",
+      "usps": "MI",
+      "fips": "26",
+      "geofabrik": "north-america/us/michigan"
+    },
+    {
+      "id": "mn",
+      "name": "Minnesota",
+      "usps": "MN",
+      "fips": "27",
+      "geofabrik": "north-america/us/minnesota"
+    },
+    {
+      "id": "ms",
+      "name": "Mississippi",
+      "usps": "MS",
+      "fips": "28",
+      "geofabrik": "north-america/us/mississippi"
+    },
+    {
+      "id": "mo",
+      "name": "Missouri",
+      "usps": "MO",
+      "fips": "29",
+      "geofabrik": "north-america/us/missouri"
+    },
+    {
+      "id": "mt",
+      "name": "Montana",
+      "usps": "MT",
+      "fips": "30",
+      "geofabrik": "north-america/us/montana"
+    },
+    {
+      "id": "ne",
+      "name": "Nebraska",
+      "usps": "NE",
+      "fips": "31",
+      "geofabrik": "north-america/us/nebraska"
+    },
+    {
+      "id": "nv",
+      "name": "Nevada",
+      "usps": "NV",
+      "fips": "32",
+      "geofabrik": "north-america/us/nevada"
+    },
+    {
+      "id": "nh",
+      "name": "New Hampshire",
+      "usps": "NH",
+      "fips": "33",
+      "geofabrik": "north-america/us/new-hampshire"
+    },
+    {
+      "id": "nj",
+      "name": "New Jersey",
+      "usps": "NJ",
+      "fips": "34",
+      "geofabrik": "north-america/us/new-jersey"
+    },
+    {
+      "id": "nm",
+      "name": "New Mexico",
+      "usps": "NM",
+      "fips": "35",
+      "geofabrik": "north-america/us/new-mexico"
+    },
+    {
+      "id": "ny",
+      "name": "New York",
+      "usps": "NY",
+      "fips": "36",
+      "geofabrik": "north-america/us/new-york"
+    },
+    {
+      "id": "nc",
+      "name": "North Carolina",
+      "usps": "NC",
+      "fips": "37",
+      "geofabrik": "north-america/us/north-carolina"
+    },
+    {
+      "id": "nd",
+      "name": "North Dakota",
+      "usps": "ND",
+      "fips": "38",
+      "geofabrik": "north-america/us/north-dakota"
+    },
+    {
+      "id": "oh",
+      "name": "Ohio",
+      "usps": "OH",
+      "fips": "39",
+      "geofabrik": "north-america/us/ohio"
+    },
+    {
+      "id": "ok",
+      "name": "Oklahoma",
+      "usps": "OK",
+      "fips": "40",
+      "geofabrik": "north-america/us/oklahoma"
+    },
+    {
+      "id": "or",
+      "name": "Oregon",
+      "usps": "OR",
+      "fips": "41",
+      "geofabrik": "north-america/us/oregon"
+    },
+    {
+      "id": "pa",
+      "name": "Pennsylvania",
+      "usps": "PA",
+      "fips": "42",
+      "geofabrik": "north-america/us/pennsylvania"
+    },
+    {
+      "id": "ri",
+      "name": "Rhode Island",
+      "usps": "RI",
+      "fips": "44",
+      "geofabrik": "north-america/us/rhode-island"
+    },
+    {
+      "id": "sc",
+      "name": "South Carolina",
+      "usps": "SC",
+      "fips": "45",
+      "geofabrik": "north-america/us/south-carolina"
+    },
+    {
+      "id": "sd",
+      "name": "South Dakota",
+      "usps": "SD",
+      "fips": "46",
+      "geofabrik": "north-america/us/south-dakota"
+    },
+    {
+      "id": "tn",
+      "name": "Tennessee",
+      "usps": "TN",
+      "fips": "47",
+      "geofabrik": "north-america/us/tennessee"
+    },
+    {
+      "id": "tx",
+      "name": "Texas",
+      "usps": "TX",
+      "fips": "48",
+      "geofabrik": "north-america/us/texas"
+    },
+    {
+      "id": "ut",
+      "name": "Utah",
+      "usps": "UT",
+      "fips": "49",
+      "geofabrik": "north-america/us/utah"
+    },
+    {
+      "id": "vt",
+      "name": "Vermont",
+      "usps": "VT",
+      "fips": "50",
+      "geofabrik": "north-america/us/vermont"
+    },
+    {
+      "id": "va",
+      "name": "Virginia",
+      "usps": "VA",
+      "fips": "51",
+      "geofabrik": "north-america/us/virginia"
+    },
+    {
+      "id": "wa",
+      "name": "Washington",
+      "usps": "WA",
+      "fips": "53",
+      "geofabrik": "north-america/us/washington"
+    },
+    {
+      "id": "wv",
+      "name": "West Virginia",
+      "usps": "WV",
+      "fips": "54",
+      "geofabrik": "north-america/us/west-virginia"
+    },
+    {
+      "id": "wi",
+      "name": "Wisconsin",
+      "usps": "WI",
+      "fips": "55",
+      "geofabrik": "north-america/us/wisconsin"
+    },
+    {
+      "id": "wy",
+      "name": "Wyoming",
+      "usps": "WY",
+      "fips": "56",
+      "geofabrik": "north-america/us/wyoming"
     }
   ]
 }

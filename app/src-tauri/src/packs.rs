@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 pub const DEFAULT_CATALOG_URL: &str =
     "https://github.com/HandyFox/reflectmaps/releases/download/data-current/catalog.json";
@@ -25,6 +25,17 @@ pub struct CatalogComponent {
     pub url: String,
     #[serde(default)]
     pub kind: String,
+    /// Files over GitHub's 2 GiB limit are published as numbered parts that
+    /// are joined back together on download.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<CatalogPart>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogPart {
+    pub file: String,
+    pub size: u64,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,42 +155,59 @@ async fn download(
         have = 0;
     }
     if have < c.size {
-        let mut req = client()?.get(&c.url);
-        if have > 0 {
-            req = req.header(reqwest::header::RANGE, format!("bytes={have}-"));
-        }
-        let resp = req.send().await?.error_for_status()?;
-        let resumed = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-        if !resumed {
-            have = 0;
-        }
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(resumed)
-            .truncate(!resumed)
-            .open(&part)
-            .await?;
-        let mut stream = resp.bytes_stream();
+        // (url, start offset in the whole file, length)
+        let segments: Vec<(String, u64, u64)> = if c.parts.is_empty() {
+            vec![(c.url.clone(), 0, c.size)]
+        } else {
+            let mut at = 0;
+            c.parts
+                .iter()
+                .map(|p| {
+                    let seg = (p.url.clone(), at, p.size);
+                    at += p.size;
+                    seg
+                })
+                .collect()
+        };
+        let mut file = tokio::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&part).await?;
+        file.set_len(have).await?;
         let mut last = Instant::now();
-        while let Some(chunk) = stream.next().await {
-            if state.cancel.lock().unwrap().remove(&key) {
-                file.flush().await?;
-                bail!("cancelled");
+        for (url, start, len) in segments {
+            if have >= start + len {
+                continue; // this part is already on disk
             }
-            let chunk = chunk?;
-            file.write_all(&chunk).await?;
-            have += chunk.len() as u64;
-            if last.elapsed() > Duration::from_millis(200) {
-                last = Instant::now();
-                emit(app, Progress {
-                    region: region.into(),
-                    component: kind.into(),
-                    stage: "downloading".into(),
-                    received: have,
-                    total: c.size,
-                    message: None,
-                });
+            let offset = have - start;
+            let mut req = client()?.get(&url);
+            if offset > 0 {
+                req = req.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+            }
+            let resp = req.send().await?.error_for_status()?;
+            if offset > 0 && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                // the server ignored the range: restart this part
+                have = start;
+                file.set_len(have).await?;
+            }
+            file.seek(std::io::SeekFrom::Start(have)).await?;
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                if state.cancel.lock().unwrap().remove(&key) {
+                    file.flush().await?;
+                    bail!("cancelled");
+                }
+                let chunk = chunk?;
+                file.write_all(&chunk).await?;
+                have += chunk.len() as u64;
+                if last.elapsed() > Duration::from_millis(200) {
+                    last = Instant::now();
+                    emit(app, Progress {
+                        region: region.into(),
+                        component: kind.into(),
+                        stage: "downloading".into(),
+                        received: have,
+                        total: c.size,
+                        message: None,
+                    });
+                }
             }
         }
         file.flush().await?;

@@ -88,7 +88,10 @@ def main():
     (out / "boundaries").mkdir(parents=True, exist_ok=True)
     catalog = json.loads((HERE / "regions.json").read_text())["regions"]
     by_id = {r["id"]: r for r in catalog}
-    ids = [x.strip().lower() for x in args.regions.split(",") if x.strip()]
+    if args.regions.strip().lower() == "all":
+        ids = [r["id"] for r in catalog]
+    else:
+        ids = [x.strip().lower() for x in args.regions.split(",") if x.strip()]
     missing = [i for i in ids if i not in by_id]
     if missing:
         raise SystemExit(f"unknown regions {missing}; add them to pipeline/regions.json")
@@ -110,11 +113,23 @@ def main():
         f"COPY (SELECT usps, name, ST_AsHEXWKB(geom) AS wkb_hex FROM states) TO '{out}/boundaries/us_states.parquet' (FORMAT PARQUET)"
     )
     for r in regions:
+        # Buffered slightly so packs overlap at state lines. Clipped to the
+        # western hemisphere: Alaska's outermost Aleutian islands lie past
+        # 180 degrees and would otherwise make its box span the globe.
         row = con.execute(
-            "SELECT ST_AsGeoJSON(ST_Buffer(geom, 0.02)) FROM states WHERE usps = ?", [r["usps"]]
+            """
+            WITH g AS (
+              SELECT ST_Intersection(ST_Buffer(geom, 0.02), ST_MakeEnvelope(-180, -90, 0, 90)) AS geom
+              FROM states WHERE usps = ?
+            )
+            SELECT ST_AsGeoJSON(geom), ST_XMin(geom), ST_YMin(geom), ST_XMax(geom), ST_YMax(geom) FROM g
+            """,
+            [r["usps"]],
         ).fetchone()
         if not row:
             raise SystemExit(f"no Census outline for {r['usps']}")
+        r["bbox"] = [round(row[1], 3), round(row[2], 3), round(row[3], 3), round(row[4], 3)]
+        r.setdefault("geofabrik", "north-america/us/" + r["name"].lower().replace(" ", "-"))
         feature = {"type": "Feature", "properties": {"id": r["id"]}, "geometry": json.loads(row[0])}
         (out / "boundaries" / f"{r['id']}.geojson").write_text(json.dumps(feature))
 

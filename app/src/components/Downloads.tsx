@@ -23,6 +23,7 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
   const [online, setOnline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("");
 
   const load = async (refresh: boolean) => {
     setLoading(true);
@@ -72,11 +73,18 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
     }
   };
 
-  const regions: CatalogRegion[] = catalog?.regions ?? [];
+  const all: CatalogRegion[] = [...(catalog?.regions ?? [])];
   // Show installed regions even when the catalog is unavailable.
   for (const [id, r] of Object.entries(installed)) {
-    if (!regions.find((x) => x.id === id)) regions.push({ id, name: r.name, bbox: r.bbox ?? undefined, components: {} });
+    if (!all.find((x) => x.id === id)) all.push({ id, name: r.name, bbox: r.bbox ?? undefined, components: {} });
   }
+  // Installed and downloading states first, then A to Z; filter by name.
+  const busy = new Set(Object.values(progress).filter((p) => !["done", "error", "cancelled"].includes(p.stage)).map((p) => p.region));
+  const rank = (r: CatalogRegion) => (installed[r.id] || busy.has(r.id) ? 0 : 1);
+  const needle = filter.trim().toLowerCase();
+  const regions = all
+    .filter((r) => !needle || r.name.toLowerCase().includes(needle) || r.id === needle)
+    .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 
   return (
     <div className="downloads">
@@ -91,6 +99,16 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
       {loading && !catalog && <div className="muted pad">Loading the list of states…</div>}
       {!loading && regions.length === 0 && <div className="note">No download list yet. Connect to the internet once to see available states.</div>}
 
+      {all.length > 6 && (
+        <input
+          className="region-filter"
+          type="search"
+          placeholder={`Find a state (${all.length} available)`}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+      )}
+      {needle && regions.length === 0 && <div className="muted pad">No state matches “{filter}”.</div>}
       <ul className="region-list">
         {regions.map((r) => {
           const inst = installed[r.id];
