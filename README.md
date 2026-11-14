@@ -20,6 +20,25 @@ Download the installer for your system from the newest `v*` release on the
 Open the app, go to **Downloads** and download a state. After that,
 everything works with the internet off.
 
+### Computer without internet
+
+The installer itself works offline. To add states, use another computer:
+
+1. Open the newest **Map data** release on the
+   [Releases page](https://github.com/HandyFox/reflectmaps/releases) and
+   download `catalog.json` plus, for each state you want, its three files
+   named by the state's two-letter code: `oh-map.pmtiles`,
+   `oh-search.tar.gz` and `oh-routing.tar.gz`. Files too big for GitHub come
+   in parts (`ca-search.tar.gz.part00`, `.part01`, ...): download every part.
+2. Copy them all into one folder on a USB drive.
+3. In ReflectMaps open **Downloads**, choose **Import folder...** and pick
+   that folder, or drag the files onto the window.
+
+The app joins split files, checks every file against `catalog.json` (so a
+damaged copy is caught), and uses the catalog as its list of states. Without
+`catalog.json` the packs still import, unchecked. Directions work across
+state lines when all the directions packs come from the same release.
+
 ## What it does
 
 - **Map**: street map with light and dark styles, offline from the first
@@ -33,8 +52,8 @@ everything works with the internet off.
   shortest, no highways), avoid tolls, highways or ferries, extra stops,
   turn-by-turn steps, printing.
 - **Downloads**: pick states; each has map, search and directions parts that
-  download, verify and update separately. Packs can also be imported from a
-  file for computers without internet.
+  download, verify and update separately. Packs copied from GitHub onto a
+  USB drive can be imported on computers without internet.
 
 Search accuracy is measured on every data build against
 [`eval/cases.json`](eval/cases.json). The current Ohio + Kentucky build

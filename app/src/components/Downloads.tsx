@@ -1,9 +1,11 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
-import { api, type Catalog, type CatalogRegion, type Progress, type Status } from "../api";
+import { api, type Catalog, type CatalogRegion, type ImportReport, type Progress, type Status } from "../api";
 import { formatBytes } from "../format";
 import { CheckIcon, DownloadIcon, FolderIcon } from "./Icons";
+
+const RELEASES = "https://github.com/HandyFox/reflectmaps/releases";
 
 const PARTS: [string, string][] = [
   ["map", "Map"],
@@ -16,9 +18,15 @@ type Props = {
   progress: Record<string, Progress>;
   onChanged: (zoomTo?: CatalogRegion) => void;
   notify: (msg: string) => void;
+  onImport: (paths: string[]) => void;
+  importing: boolean;
+  importReport: ImportReport | null;
+  onDismissReport: () => void;
+  /** Changes when an import brought a new catalog.json. */
+  catalogStamp: number;
 };
 
-export function Downloads({ status, progress, onChanged, notify }: Props) {
+export function Downloads({ status, progress, onChanged, notify, onImport, importing, importReport, onDismissReport, catalogStamp }: Props) {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [online, setOnline] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +45,10 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
   useEffect(() => {
     load(false).then(() => load(true));
   }, []);
+
+  useEffect(() => {
+    if (catalogStamp > 0) load(false);
+  }, [catalogStamp]);
 
   const installed = status?.installed.regions ?? {};
 
@@ -58,20 +70,27 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
     onChanged();
   };
 
-  const importFile = async () => {
-    const path = await open({
-      multiple: false,
-      filters: [{ name: "ReflectMaps packs", extensions: ["pmtiles", "gz"] }],
+  const pickFiles = async () => {
+    const picked = await open({
+      multiple: true,
+      title: "Choose map pack files",
+      filters: [
+        {
+          name: "ReflectMaps packs",
+          extensions: ["pmtiles", "gz", "json", ...Array.from({ length: 10 }, (_, i) => `part0${i}`)],
+        },
+        { name: "All files", extensions: ["*"] },
+      ],
     });
-    if (!path) return;
-    try {
-      const what = await api.importPack(path as string);
-      notify(`Imported ${what}`);
-      onChanged();
-    } catch (e) {
-      notify(String(e));
-    }
+    if (picked) onImport(Array.isArray(picked) ? picked : [picked]);
   };
+
+  const pickFolder = async () => {
+    const picked = await open({ directory: true, multiple: false, title: "Choose the folder with your map packs" });
+    if (picked) onImport([picked as string]);
+  };
+
+  const releaseUrl = catalog ? `${RELEASES}/tag/${catalog.tag}` : RELEASES;
 
   const all: CatalogRegion[] = [...(catalog?.regions ?? [])];
   // Show installed regions even when the catalog is unavailable.
@@ -97,7 +116,80 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
         </div>
       )}
       {loading && !catalog && <div className="muted pad">Loading the list of states…</div>}
-      {!loading && regions.length === 0 && <div className="note">No download list yet. Connect to the internet once to see available states.</div>}
+      {!loading && regions.length === 0 && (
+        <div className="note">
+          No download list yet. Connect to the internet once to see available states, or import packs copied from
+          another computer.
+        </div>
+      )}
+
+      <section className="import-box">
+        <div className="import-head">
+          <strong>Import from a USB drive or folder</strong>
+          <span className="muted small">or drag pack files onto this window</span>
+        </div>
+        <div className="import-actions">
+          <button className="btn" onClick={pickFolder} disabled={importing}>Import folder…</button>
+          <button className="btn" onClick={pickFiles} disabled={importing}>Import files…</button>
+        </div>
+        {importing && <div className="muted small">Importing… large states can take a few minutes.</div>}
+        {importReport && (
+          <div className="import-report">
+            {importReport.imported.length > 0 && (
+              <div className="note small">
+                <strong>Imported:</strong> {importReport.imported.join(", ")}
+              </div>
+            )}
+            {importReport.already.length > 0 && (
+              <div className="muted small">Already installed: {importReport.already.join(", ")}</div>
+            )}
+            {importReport.catalog_updated && importReport.imported.length === 0 && (
+              <div className="note small">Updated the list of states from catalog.json.</div>
+            )}
+            {importReport.warnings.map((w, i) => (
+              <div key={`w${i}`} className="note warn small">{w}</div>
+            ))}
+            {importReport.skipped.length > 0 && (
+              <div className="note error small">
+                <strong>Not imported:</strong>
+                <ul>
+                  {importReport.skipped.map((m, i) => (
+                    <li key={i}>{m}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button className="link-btn small" onClick={onDismissReport}>Dismiss</button>
+          </div>
+        )}
+        <details className="offline-help">
+          <summary>How to get packs for a computer without internet</summary>
+          <ol>
+            <li>
+              On a computer with internet, open the map data release on GitHub:{" "}
+              {online ? (
+                <button className="link-btn url" onClick={() => openUrl(releaseUrl).catch(() => {})}>
+                  {releaseUrl.replace("https://", "")}
+                </button>
+              ) : (
+                <code>{releaseUrl.replace("https://", "")}</code>
+              )}{" "}
+              (the newest “Map data” release).
+            </li>
+            <li>
+              Download <code>catalog.json</code>, then for each state its three files, named by the state’s two-letter
+              code: <code>oh-map.pmtiles</code>, <code>oh-search.tar.gz</code> and <code>oh-routing.tar.gz</code>.
+              Files too big for GitHub come in parts (<code>.part00</code>, <code>.part01</code>…): get every part.
+            </li>
+            <li>Copy them all into one folder on a USB drive.</li>
+            <li>On this computer, choose <em>Import folder…</em> and pick that folder.</li>
+          </ol>
+          <p className="muted small">
+            catalog.json lets ReflectMaps check every file for damage. Directions work across state lines when all the
+            directions packs come from the same release.
+          </p>
+        </details>
+      </section>
 
       {all.length > 6 && (
         <input
@@ -175,8 +267,8 @@ export function Downloads({ status, progress, onChanged, notify }: Props) {
         })}
       </ul>
 
+
       <div className="downloads-foot">
-        <button className="btn" onClick={importFile}>Import pack from file…</button>
         {online && (
           <button className="btn" onClick={() => load(true)} disabled={loading}>Check for updates</button>
         )}

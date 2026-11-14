@@ -88,6 +88,15 @@ export type Progress = {
   message?: string | null;
 };
 
+export type ImportReport = {
+  imported: string[];
+  skipped: string[];
+  already: string[];
+  warnings: string[];
+  catalog_updated: boolean;
+  first_region?: string | null;
+};
+
 export type RouteRequest = {
   locations: { lat: number; lon: number }[];
   avoid_tolls: boolean;
@@ -106,7 +115,7 @@ export const api = {
   install: (region: string, components: string[]) => invoke<void>("install_region", { region, components }),
   cancel: (region: string) => invoke<void>("cancel_install", { region }),
   remove: (region: string) => invoke<void>("remove_region", { region }),
-  importPack: (path: string) => invoke<string>("import_pack", { path }),
+  importPacks: (paths: string[]) => invoke<ImportReport>("import_packs", { paths }),
   onProgress: (cb: (p: Progress) => void): Promise<UnlistenFn> =>
     listen<Progress>("pack-progress", (e) => cb(e.payload)),
 };

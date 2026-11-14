@@ -280,7 +280,8 @@ jobs:
         run: |
           TAG="${{ needs.prepare.outputs.tag }}"
           gh release upload "$TAG" catalog.json --clobber
-          gh release edit "$TAG" --draft=false --prerelease --latest=false
+          python3 pipeline/release_notes.py catalog.json > notes.md
+          gh release edit "$TAG" --draft=false --prerelease --latest=false --notes-file notes.md
           if ! gh release view data-current >/dev/null 2>&1; then
             gh release create data-current --prerelease --latest=false --target "${{ github.sha }}" \
               --title "Current map data" \

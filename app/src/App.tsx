@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type CatalogRegion, type Hit, type Progress, type RouteOption, type Status } from "./api";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { api, type CatalogRegion, type Hit, type ImportReport, type Progress, type RouteOption, type Status } from "./api";
 import { Directions, type AvoidOptions } from "./components/Directions";
 import { Downloads } from "./components/Downloads";
 import { DownloadIcon, MoonIcon, RouteIcon, SearchIcon, SunIcon } from "./components/Icons";
@@ -63,6 +64,10 @@ export default function App() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const [online, setOnline] = useState(navigator.onLine);
+  const [importing, setImporting] = useState(false);
+  const [importReport, setImportReport] = useState<ImportReport | null>(null);
+  const [catalogStamp, setCatalogStamp] = useState(0);
+  const [dragging, setDragging] = useState(false);
 
   const notify = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -77,6 +82,48 @@ export default function App() {
     setStatus(s);
     return s;
   }, []);
+
+  // ---- importing pack files (from a USB drive, for example) ----
+  const runImport = useCallback(
+    async (paths: string[]) => {
+      if (!paths.length) return;
+      setTab("downloads");
+      setImporting(true);
+      setImportReport(null);
+      try {
+        const r = await api.importPacks(paths);
+        setImportReport(r);
+        if (r.catalog_updated) setCatalogStamp((n) => n + 1);
+        const s = await refreshStatus();
+        ctrl.current?.reloadTiles();
+        const bbox = r.first_region ? s.installed.regions[r.first_region]?.bbox : null;
+        if (bbox) ctrl.current?.fitBbox(bbox);
+        const n = r.imported.length;
+        notify(n ? `Imported ${n} pack${n === 1 ? "" : "s"}` : r.already.length ? "Those packs are already installed" : "Nothing was imported");
+      } catch (e) {
+        setImportReport({ imported: [], skipped: [String(e)], already: [], warnings: [], catalog_updated: false });
+      } finally {
+        setImporting(false);
+      }
+    },
+    [notify, refreshStatus],
+  );
+
+  // Files or folders dropped anywhere on the window are imported.
+  useEffect(() => {
+    const un = getCurrentWebview().onDragDropEvent((e) => {
+      const p = e.payload;
+      if (p.type === "enter" || p.type === "over") setDragging(true);
+      else if (p.type === "leave") setDragging(false);
+      else if (p.type === "drop") {
+        setDragging(false);
+        runImport(p.paths);
+      }
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [runImport]);
 
   // ---- map setup ----
   useEffect(() => {
@@ -292,7 +339,17 @@ export default function App() {
             />
           )}
           {tab === "downloads" && (
-            <Downloads status={status} progress={progress} onChanged={onPacksChanged} notify={notify} />
+            <Downloads
+              status={status}
+              progress={progress}
+              onChanged={onPacksChanged}
+              notify={notify}
+              onImport={runImport}
+              importing={importing}
+              importReport={importReport}
+              onDismissReport={() => setImportReport(null)}
+              catalogStamp={catalogStamp}
+            />
           )}
         </section>
 
@@ -325,6 +382,12 @@ export default function App() {
           ))}
         </div>
       </main>
+
+      {dragging && (
+        <div className="drop-overlay">
+          <div>Drop map pack files or a folder to import them</div>
+        </div>
+      )}
 
       {selectedRoute && (
         <div className="print-only">

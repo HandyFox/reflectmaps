@@ -1,3 +1,4 @@
+mod import;
 mod packs;
 mod pmtiles;
 mod routing;
@@ -127,10 +128,12 @@ async fn remove_region(state: St<'_>, region: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || packs::remove(&st, &region).map_err(err)).await.map_err(err)?
 }
 
+/// Installs pack files (or folders of them) the user already has on disk.
 #[tauri::command]
-async fn import_pack(state: St<'_>, path: String) -> Result<String, String> {
+async fn import_packs(app: tauri::AppHandle, state: St<'_>, paths: Vec<String>) -> Result<import::ImportReport, String> {
     let st = state.inner().clone();
-    tokio::task::spawn_blocking(move || packs::import(&st, &PathBuf::from(path)).map_err(|e| format!("{e:#}")))
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    tokio::task::spawn_blocking(move || import::import(&|p| packs::emit(&app, p), &st, &paths).map_err(|e| format!("{e:#}")))
         .await
         .map_err(err)?
 }
@@ -171,7 +174,7 @@ pub fn run() {
             install_region,
             cancel_install,
             remove_region,
-            import_pack
+            import_packs
         ])
         .run(tauri::generate_context!())
         .expect("error while running ReflectMaps");

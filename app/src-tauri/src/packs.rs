@@ -121,11 +121,11 @@ pub async fn get_catalog(state: &AppState, refresh: bool) -> CatalogResult {
     }
 }
 
-fn emit(app: &AppHandle, p: Progress) {
+pub(crate) fn emit(app: &AppHandle, p: Progress) {
     let _ = app.emit("pack-progress", p);
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     let mut f = std::fs::File::open(path)?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
@@ -237,7 +237,9 @@ fn unpack_tar_gz(file: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Installs a verified download. Runs on a blocking thread.
+/// Installs a verified pack file. Runs on a blocking thread. A map file is
+/// moved into place; search and routing archives are unpacked and left for
+/// the caller to delete.
 pub fn install_file(
     state: &AppState,
     region_id: &str,
@@ -285,7 +287,6 @@ pub fn install_file(
             let _ = std::fs::remove_dir_all(&tmp);
             state.search.write().unwrap().add_index(&format!("{region_id}-search"), &dest)?;
             comp.path = rel(&paths.data, &dest);
-            let _ = std::fs::remove_file(file);
         }
         "routing" => {
             let tmp = paths.routing().join(format!(".unpack-{region_id}"));
@@ -306,7 +307,6 @@ pub fn install_file(
             comp.graph_build = manifest["graph_build"].as_str().unwrap_or_default().to_string();
             comp.tiles = tiles;
             comp.path = rel(&paths.data, &paths.routing_tiles());
-            let _ = std::fs::remove_file(file);
         }
         other => bail!("unknown pack component {other}"),
     }
@@ -388,7 +388,11 @@ async fn install_inner(app: &AppHandle, state: &Arc<AppState>, region_id: &str, 
             let (rid, rname, bbox, k, tag) = (reg.id.clone(), reg.name.clone(), reg.bbox, kind.clone(), cat.tag.clone());
             let (fname, size, sha) = (c.file.clone(), c.size, c.sha256.clone());
             tokio::task::spawn_blocking(move || {
-                install_file(&st, &rid, &rname, bbox, &k, &file, &tag, (&fname, size, &sha))
+                let r = install_file(&st, &rid, &rname, bbox, &k, &file, &tag, (&fname, size, &sha));
+                if r.is_ok() {
+                    let _ = std::fs::remove_file(&file); // gone already if it was moved into place
+                }
+                r
             })
             .await??;
             if kind == "routing" {
@@ -452,38 +456,4 @@ pub fn remove(state: &AppState, region_id: &str) -> Result<()> {
     state.save_installed()?;
     crate::routing::refresh(state);
     Ok(())
-}
-
-/// Installs a pack file the user already has on disk (e.g. copied on a USB
-/// drive). The region and component come from the file name:
-/// <id>-map.pmtiles, <id>-search.tar.gz, <id>-routing.tar.gz.
-pub fn import(state: &AppState, path: &Path) -> Result<String> {
-    let name = path.file_name().and_then(|n| n.to_str()).context("bad file name")?.to_string();
-    let (id, kind) = if let Some(id) = name.strip_suffix("-map.pmtiles") {
-        (id, "map")
-    } else if let Some(id) = name.strip_suffix("-search.tar.gz") {
-        (id, "search")
-    } else if let Some(id) = name.strip_suffix("-routing.tar.gz") {
-        (id, "routing")
-    } else {
-        bail!("{name} is not a ReflectMaps pack (expected <state>-map.pmtiles, <state>-search.tar.gz or <state>-routing.tar.gz)");
-    };
-    let cat: Option<Catalog> = std::fs::read(state.paths.catalog_cache()).ok().and_then(|b| serde_json::from_slice(&b).ok());
-    let reg = cat.as_ref().and_then(|c| c.regions.iter().find(|r| r.id == id).cloned());
-    let region_name = reg.as_ref().map(|r| r.name.clone()).unwrap_or_else(|| id.to_uppercase());
-    let sha = sha256_file(path)?;
-    let size = std::fs::metadata(path)?.len();
-    // Work on a copy so the user's file stays where it is.
-    let copy = state.paths.downloads().join(format!("{name}.import"));
-    std::fs::copy(path, &copy)?;
-    let tag = cat
-        .as_ref()
-        .filter(|_| reg.as_ref().and_then(|r| r.components.get(kind)).is_some_and(|x| x.sha256 == sha))
-        .map(|c| c.tag.clone())
-        .unwrap_or_else(|| "imported".into());
-    install_file(state, id, &region_name, reg.and_then(|r| r.bbox), kind, &copy, &tag, (&name, size, &sha))?;
-    if kind == "routing" {
-        crate::routing::refresh(state);
-    }
-    Ok(format!("{region_name} {kind}"))
 }
