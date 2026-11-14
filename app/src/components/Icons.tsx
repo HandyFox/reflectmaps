@@ -36,3 +36,5 @@ export function KindIcon({ kind }: { kind: string }) {
   };
   return <span className={`kind kind-${kind}`}>{letter[kind] ?? "●"}</span>;
 }
+export const PrintIcon = ({ size = 16 }: P) =>
+  svg(size, <><path d="M7 9V3h10v6" /><rect x="3" y="9" width="18" height="8" rx="2" /><path d="M7 14h10v7H7z" /></>);

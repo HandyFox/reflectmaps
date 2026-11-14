@@ -251,6 +251,13 @@ export class MapController {
     (this.map.getSource("protomaps") as VectorTileSource | undefined)?.setTiles([url]);
   }
 
+  /** What the map shows now, for printing. */
+  view(): { center: [number, number]; zoom: number; bearing: number; width: number; height: number } {
+    const c = this.map.getCenter();
+    const el = this.map.getContainer();
+    return { center: [c.lng, c.lat], zoom: this.map.getZoom(), bearing: this.map.getBearing(), width: el.clientWidth, height: el.clientHeight };
+  }
+
   center(): [number, number] {
     const c = this.map.getCenter();
     return [c.lat, c.lng];

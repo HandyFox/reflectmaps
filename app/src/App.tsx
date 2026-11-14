@@ -3,10 +3,12 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, type CatalogRegion, type Hit, type ImportReport, type Progress, type RouteOption, type Status } from "./api";
 import { Directions, type AvoidOptions } from "./components/Directions";
 import { Downloads } from "./components/Downloads";
-import { DownloadIcon, MoonIcon, RouteIcon, SearchIcon, SunIcon } from "./components/Icons";
+import { DownloadIcon, MoonIcon, PrintIcon, RouteIcon, SearchIcon, SunIcon } from "./components/Icons";
+import { PrintDialog, type PrintJob } from "./components/PrintDialog";
+import type { SnapshotPin } from "./map/snapshot";
 import { PlaceCard } from "./components/PlaceCard";
 import { SearchBox } from "./components/SearchBox";
-import { formatDuration, formatMiles, zoomFor } from "./format";
+import { zoomFor } from "./format";
 import { MapController, type View } from "./map/MapController";
 import type { Flavor } from "./map/style";
 
@@ -68,6 +70,7 @@ export default function App() {
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [catalogStamp, setCatalogStamp] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [printJob, setPrintJob] = useState<PrintJob | null>(null);
 
   const notify = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -259,6 +262,64 @@ export default function App() {
 
   const selectedRoute = routes.find((r) => r.id === selected);
 
+  // ---- printing ----
+  const waypointPins = (): SnapshotPin[] => {
+    const pts = waypoints.filter((w): w is Hit => !!w);
+    return pts.map((w, i) => ({
+      lon: w.lon,
+      lat: w.lat,
+      label: i === 0 ? "A" : i === pts.length - 1 ? "B" : String(i),
+      color: i === 0 ? "#2da44e" : i === pts.length - 1 ? "#d1453b" : "#57606a",
+    }));
+  };
+
+  const printDirections = () => {
+    if (!selectedRoute) return;
+    const stops = waypoints.filter((w): w is Hit => !!w).map((w) => ({ name: w.name, label: w.label }));
+    setPrintJob({ kind: "directions", route: selectedRoute, stops, pins: waypointPins() });
+  };
+
+  const printMap = () => {
+    const v = ctrl.current?.view();
+    if (!v) return;
+    const showRoute = tab === "directions" && selectedRoute;
+    const pins: SnapshotPin[] = showRoute
+      ? waypointPins()
+      : tab === "search" && place
+        ? [{ lon: place.lon, lat: place.lat, label: "", color: "#d1453b" }]
+        : [];
+    const ends = waypoints.filter((w): w is Hit => !!w);
+    const title = showRoute
+      ? `${ends[0]?.name ?? "Start"} to ${ends[ends.length - 1]?.name ?? "destination"}`
+      : tab === "search" && place
+        ? place.name
+        : "";
+    setPrintJob({
+      kind: "map",
+      title,
+      center: v.center,
+      zoom: v.zoom,
+      bearing: v.bearing,
+      viewWidth: v.width,
+      pins,
+      line: showRoute ? selectedRoute.coordinates : undefined,
+    });
+  };
+
+  // Ctrl+P / Cmd+P opens the print preview instead of printing the app window.
+  const printRef = useRef<() => void>(() => {});
+  printRef.current = tab === "directions" && selectedRoute ? printDirections : printMap;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        printRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="app">
       <aside className="panel">
@@ -335,7 +396,7 @@ export default function App() {
                 ctrl.current?.highlight(m.lat, m.lon);
                 ctrl.current?.flyTo(m.lat, m.lon, 16);
               }}
-              onPrint={() => window.print()}
+              onPrint={printDirections}
             />
           )}
           {tab === "downloads" && (
@@ -368,6 +429,9 @@ export default function App() {
 
       <main className="map-wrap" onClick={() => menu && setMenu(null)}>
         <div ref={mapEl} className="map" />
+        <button className="map-print-btn" onClick={printMap} title="Print this map (Ctrl+P)">
+          <PrintIcon /> Print map
+        </button>
         {menu && (
           <ul className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
             <li onClick={() => menuAction("from")}>Directions from here</li>
@@ -389,26 +453,7 @@ export default function App() {
         </div>
       )}
 
-      {selectedRoute && (
-        <div className="print-only">
-          <h1>
-            {waypoints[0]?.name} → {waypoints[waypoints.length - 1]?.name}
-          </h1>
-          <p>
-            {selectedRoute.label}
-            {selectedRoute.via ? ` via ${selectedRoute.via}` : ""} · {formatDuration(selectedRoute.time_s)} ·{" "}
-            {formatMiles(selectedRoute.distance_mi)}
-          </p>
-          <ol>
-            {selectedRoute.maneuvers.map((m, i) => (
-              <li key={i}>
-                {m.instruction} {m.distance_mi > 0 ? `(${formatMiles(m.distance_mi)})` : ""}
-              </li>
-            ))}
-          </ol>
-          <p className="small">Printed from ReflectMaps. © OpenStreetMap contributors.</p>
-        </div>
-      )}
+      {printJob && <PrintDialog job={printJob} onClose={() => setPrintJob(null)} />}
     </div>
   );
 }

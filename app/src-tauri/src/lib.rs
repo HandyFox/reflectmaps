@@ -138,6 +138,13 @@ async fn import_packs(app: tauri::AppHandle, state: St<'_>, paths: Vec<String>) 
         .map_err(err)?
 }
 
+/// Opens the system print dialog for the window. `window.print()` alone does
+/// nothing in the macOS web view, so printing goes through the native call.
+#[tauri::command]
+fn print_page(webview: tauri::Webview) -> Result<(), String> {
+    webview.print().map_err(err)
+}
+
 pub fn run() {
     // WebKitGTK's DMA-BUF renderer shows a blank window on some NVIDIA
     // drivers; the plain path is reliable everywhere.
@@ -174,7 +181,8 @@ pub fn run() {
             install_region,
             cancel_install,
             remove_region,
-            import_packs
+            import_packs,
+            print_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running ReflectMaps");

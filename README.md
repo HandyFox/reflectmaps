@@ -50,7 +50,11 @@ state lines when all the directions packs come from the same release.
   its neighbors on the street and marked *approximate*.
 - **Directions**: driving routes with alternatives (fastest, other routes,
   shortest, no highways), avoid tolls, highways or ferries, extra stops,
-  turn-by-turn steps, printing.
+  turn-by-turn steps.
+- **Printing**: print the map view (Print map button or Ctrl+P) or a route's
+  directions, with a preview, paper size and orientation, a sharp map image,
+  scale bar and north arrow. Directions print with an overview map and a
+  numbered step table. Pick a PDF printer to save a PDF instead.
 - **Downloads**: pick states; each has map, search and directions parts that
   download, verify and update separately. Packs copied from GitHub onto a
   USB drive can be imported on computers without internet.
