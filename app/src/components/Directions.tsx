@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Hit, Maneuver, RouteOption } from "../api";
 import { formatDuration, formatMiles } from "../format";
 import { CloseIcon, PlusIcon, SwapIcon } from "./Icons";
@@ -16,6 +17,11 @@ type Props = {
   loading: boolean;
   error: string | null;
   near: () => [number, number];
+  /** States the From/To boxes search (null = all). */
+  states: () => string[] | null;
+  /** Route searches finished so far, while routing. */
+  progress: { done: number; total: number } | null;
+  scopePicker: ReactNode;
   onStep: (m: Maneuver) => void;
   onPrint: () => void;
 };
@@ -43,6 +49,8 @@ export function Directions(p: Props) {
               placeholder={i === 0 ? "Choose starting point" : i === last ? "Choose destination" : `Stop ${i}`}
               value={w?.name ?? ""}
               near={p.near}
+              states={p.states}
+              channel={`wp${i}`}
               onSelect={(h) => update(i, h)}
               onClear={() => update(i, null)}
             />
@@ -69,6 +77,8 @@ export function Directions(p: Props) {
         </div>
       </div>
 
+      {p.scopePicker}
+
       <div className="avoid">
         <span className="muted small">Avoid</span>
         {(
@@ -85,7 +95,24 @@ export function Directions(p: Props) {
         ))}
       </div>
 
-      {p.loading && <div className="muted pad">Finding routes…</div>}
+      {p.loading && (
+        <div className="search-progress pad-y" role="progressbar">
+          <div className="bar thin">
+            <div
+              className={p.progress && p.progress.total ? "" : "indeterminate"}
+              style={{
+                width: p.progress && p.progress.total ? `${Math.max(8, (p.progress.done / p.progress.total) * 100)}%` : undefined,
+              }}
+            />
+          </div>
+          <span className="muted small">
+            Finding routes…
+            {p.progress && p.progress.total > 1
+              ? ` ${p.progress.done} of ${p.progress.total} route searches done`
+              : ""}
+          </span>
+        </div>
+      )}
       {p.error && !p.loading && <div className="note error">{p.error}</div>}
 
       {!p.loading && p.routes.length > 0 && (

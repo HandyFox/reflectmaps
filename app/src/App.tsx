@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { api, type CatalogRegion, type Hit, type ImportReport, type Progress, type RouteOption, type Status } from "./api";
+import { api, isCancelled, type Bbox, type CatalogRegion, type Hit, type ImportReport, type Progress, type RouteOption, type Status } from "./api";
 import { Directions, type AvoidOptions } from "./components/Directions";
 import { Downloads } from "./components/Downloads";
 import { DownloadIcon, MoonIcon, PrintIcon, RouteIcon, SearchIcon, SunIcon } from "./components/Icons";
 import { PrintDialog, type PrintJob } from "./components/PrintDialog";
+import { ResultsList } from "./components/ResultsList";
+import { ScopePicker } from "./components/ScopePicker";
+import { nextSearchSeq, SearchProgressLine, useSearchProgress } from "./components/SearchBox";
+import { loadScope, saveScope, scopeStates, statesNear, type SearchScope } from "./searchScope";
 import type { SnapshotPin } from "./map/snapshot";
 import { PlaceCard } from "./components/PlaceCard";
 import { SearchBox } from "./components/SearchBox";
@@ -71,6 +75,27 @@ export default function App() {
   const [catalogStamp, setCatalogStamp] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [printJob, setPrintJob] = useState<PrintJob | null>(null);
+  const [scope, setScopeState] = useState<SearchScope>(loadScope);
+  const [viewBox, setViewBox] = useState<Bbox | null>(null);
+  const [results, setResults] = useState<{ query: string; hits: Hit[]; scoped: boolean } | null>(null);
+  const [resultsBusy, setResultsBusy] = useState(false);
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  const [routeProgress, setRouteProgress] = useState<{ done: number; total: number } | null>(null);
+  const resultsSeq = useRef(0);
+  const resultsProgress = useSearchProgress("results", resultsSeq, resultsBusy);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const setScope = (s: SearchScope) => {
+    setScopeState(s);
+    saveScope(s);
+  };
+  /** States the search boxes read right now (null = all). */
+  const searchStates = useCallback(
+    () => scopeStates(scopeRef.current, statusRef.current?.installed.regions ?? {}, ctrl.current?.bounds() ?? null),
+    [],
+  );
 
   const notify = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -133,11 +158,17 @@ export default function App() {
     if (!mapEl.current) return;
     const c = new MapController(mapEl.current, flavor, loadView());
     ctrl.current = c;
-    c.onMove = (v) => localStorage.setItem("rm.view", JSON.stringify(v));
+    c.onMove = (v) => {
+      localStorage.setItem("rm.view", JSON.stringify(v));
+      setViewBox(c.bounds());
+    };
+    c.map.once("load", () => setViewBox(c.bounds()));
+    c.onResultHover = (id) => setHoverId(id);
     c.onContextMenu = (lat, lon, x, y) => setMenu({ lat, lon, x, y });
     c.onRouteClick = (id) => setSelected(id);
     c.onPoiClick = async (name, lat, lon) => {
-      const hits = await api.search(name, [lat, lon], 5).catch(() => []);
+      const around = statesNear(statusRef.current?.installed.regions ?? {}, [lon, lat, lon, lat]);
+      const hits = await api.search(name, [lat, lon], 5, around.length ? around : null, "poi", nextSearchSeq()).catch(() => []);
       const h = hits.find((x) => (x.distance_km ?? 99) < 0.3);
       setPlace(h ?? { ...pointHit(lat, lon, name), kind: "place" });
       setTab("search");
@@ -146,12 +177,14 @@ export default function App() {
       if (Object.keys(s.installed.regions).length === 0) setTab("downloads");
     });
     const un = api.onProgress((p) => setProgress((cur) => ({ ...cur, [`${p.region}:${p.component}`]: p })));
+    const unRoute = api.onRouteProgress((p) => setRouteProgress(p));
     const on = () => setOnline(true);
     const off = () => setOnline(false);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
     return () => {
       un.then((f) => f());
+      unRoute.then((f) => f());
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
       c.destroy();
@@ -168,6 +201,43 @@ export default function App() {
   useEffect(() => {
     ctrl.current?.showPlace(tab === "search" ? place : null);
   }, [place, tab]);
+
+  // ---- search results on the map ----
+  useEffect(() => {
+    ctrl.current?.setResults(tab === "search" && results ? results.hits : [], place?.id ?? null);
+  }, [results, place, tab]);
+  useEffect(() => {
+    ctrl.current?.hoverResult(hoverId);
+  }, [hoverId]);
+
+  const runResults = async (query: string, everywhere = false) => {
+    const my = nextSearchSeq();
+    resultsSeq.current = my;
+    setResultsBusy(true);
+    setPlace(null);
+    const list = everywhere ? null : searchStates();
+    try {
+      const hits = await api.search(query, near(), 20, list, "results", my);
+      if (my !== resultsSeq.current) return;
+      setResults({ query, hits, scoped: list !== null });
+      if (hits.length) ctrl.current?.fitHits(hits, zoomFor(hits[0].kind));
+    } catch (e) {
+      if (my === resultsSeq.current && !isCancelled(e)) notify(String(e));
+    } finally {
+      if (my === resultsSeq.current) setResultsBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!ctrl.current) return;
+    ctrl.current.onResultClick = (id) => {
+      const h = results?.hits.find((x) => x.id === id);
+      if (h) {
+        setPlace(h);
+        setTab("search");
+      }
+    };
+  }, [results]);
 
   // ---- directions ----
   const onDrag = useCallback(
@@ -196,6 +266,7 @@ export default function App() {
     }
     setRouting(true);
     setRouteError(null);
+    setRouteProgress(null);
     api
       .route({ locations: pts.map((p) => ({ lat: p.lat, lon: p.lon })), ...avoid })
       .then((r) => {
@@ -353,22 +424,49 @@ export default function App() {
             <>
               <SearchBox
                 autoFocus
+                channel="search"
                 placeholder="Search places and addresses"
                 near={near}
+                states={searchStates}
                 onSelect={(h) => {
+                  setResults(null);
                   setPlace(h);
                   ctrl.current?.flyTo(h.lat, h.lon, zoomFor(h.kind));
                 }}
-                onClear={() => setPlace(null)}
+                onSubmit={(q) => runResults(q)}
+                onClear={() => {
+                  resultsSeq.current = nextSearchSeq();
+                  setResultsBusy(false);
+                  setResults(null);
+                  setPlace(null);
+                }}
               />
+              <ScopePicker scope={scope} setScope={setScope} regions={status?.installed.regions ?? {}} view={viewBox} />
+              <SearchProgressLine p={resultsProgress} />
               {place && (
                 <PlaceCard
                   hit={place}
                   onClose={() => setPlace(null)}
                   onDirections={(h) => directionsTo(h)}
+                  onBack={results ? () => setPlace(null) : undefined}
                 />
               )}
-              {!place && (
+              {!place && results && (
+                <ResultsList
+                  query={results.query}
+                  hits={results.hits}
+                  scoped={results.scoped}
+                  hovered={hoverId}
+                  onHover={setHoverId}
+                  onPick={(h) => {
+                    setPlace(h);
+                    setHoverId(null);
+                  }}
+                  onClose={() => setResults(null)}
+                  onSearchAll={() => runResults(results.query, true)}
+                />
+              )}
+              {!place && !results && (
                 <div className="tips muted small">
                   <p>Try a business name, a full address like “123 N High St Columbus”, a city, a ZIP code, or a category like “coffee” or “gas”.</p>
                   <p>Right-click the map for directions from or to any point.</p>
@@ -392,6 +490,11 @@ export default function App() {
               loading={routing}
               error={routeError}
               near={near}
+              states={searchStates}
+              progress={routeProgress}
+              scopePicker={
+                <ScopePicker scope={scope} setScope={setScope} regions={status?.installed.regions ?? {}} view={viewBox} />
+              }
               onStep={(m) => {
                 ctrl.current?.highlight(m.lat, m.lon);
                 ctrl.current?.flyTo(m.lat, m.lon, 16);

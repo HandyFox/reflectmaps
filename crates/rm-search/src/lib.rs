@@ -237,6 +237,49 @@ pub struct QueryOptions {
     pub limit: usize,
 }
 
+/// Which indexes a query reads.
+#[derive(Debug, Clone, Default)]
+pub struct Scope {
+    /// Names of the indexes to search; `None` searches all of them.
+    pub indexes: Option<Vec<String>>,
+    /// Indexes covering the whole country (cities, ZIP codes): searched even
+    /// when not listed in `indexes`, keeping only results inside `boxes`.
+    pub shared: Vec<String>,
+    /// [west, south, east, north] areas for results from `shared` indexes.
+    pub boxes: Vec<[f64; 4]>,
+}
+
+impl Scope {
+    /// Whether to read index `name`, and if so whether to keep its results
+    /// only inside `boxes`.
+    fn wants(&self, name: &str) -> Option<bool> {
+        match &self.indexes {
+            None => Some(false),
+            Some(list) if list.iter().any(|n| n == name) => Some(false),
+            Some(_) if self.shared.iter().any(|n| n == name) => Some(true),
+            Some(_) => None,
+        }
+    }
+}
+
+/// Candidates read in full from each search, across all indexes.
+const WIDE: usize = 600;
+const CLOSE: usize = 150;
+
+/// Raised when a newer query replaced this one before it finished.
+#[derive(Debug)]
+pub struct Cancelled;
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("cancelled")
+    }
+}
+impl std::error::Error for Cancelled {}
+
+fn in_boxes(boxes: &[[f64; 4]], lat: f64, lon: f64) -> bool {
+    boxes.iter().any(|b| lon >= b[0] && lat >= b[1] && lon <= b[2] && lat <= b[3])
+}
+
 impl Searcher {
     pub fn new() -> Self {
         Self::default()
@@ -266,6 +309,20 @@ impl Searcher {
 
     /// Free-text search for places, addresses, streets and areas.
     pub fn search(&self, query: &str, opts: QueryOptions) -> Result<Vec<Hit>> {
+        self.search_scoped(query, opts, &Scope::default(), &|_, _| {}, &|| false)
+    }
+
+    /// Like [`search`](Self::search), limited to `scope`. `progress(done,
+    /// total)` is called as indexes finish; when `cancelled()` turns true the
+    /// search stops with a [`Cancelled`] error.
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        opts: QueryOptions,
+        scope: &Scope,
+        progress: &(dyn Fn(usize, usize) + Sync),
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<Hit>> {
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
         if let Some(hit) = rank::parse_coordinates(query) {
             return Ok(vec![hit]);
@@ -274,30 +331,94 @@ impl Searcher {
         if parsed.tokens.is_empty() {
             return Ok(vec![]);
         }
-        let mut all: Vec<Hit> = Vec::new();
-        for idx in &self.indexes {
-            let q = build_query(&idx.f, &parsed);
-            let searcher = idx.reader.searcher();
-            // Candidates are picked by text score weighted by prominence and
-            // distance, so a short prefix such as "churc" still brings back
-            // Churchill Downs rather than 400 arbitrary words starting "churc".
-            // A second, nearby-only pass finds close places for category
-            // searches ("gas station" -> the Speedway around the corner).
-            let mut top = searcher.search(&q, &weighted_collector(600, opts.near, 300.0))?;
-            if opts.near.is_some() {
-                let seen: std::collections::HashSet<_> = top.iter().map(|(_, a)| *a).collect();
-                for (s, a) in searcher.search(&q, &weighted_collector(150, opts.near, 4.0))? {
-                    if !seen.contains(&a) {
-                        top.push((s, a));
-                    }
-                }
-            }
-            for (bm25, addr) in top {
-                let doc: TantivyDocument = searcher.doc(addr)?;
-                let hit = rank::to_hit(&idx.f, &doc, bm25);
-                all.push(hit);
-            }
+
+        // Indexes to read, biggest first so the work spreads evenly.
+        let mut todo: Vec<(usize, bool)> = self
+            .indexes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, idx)| scope.wants(&idx.name).map(|clip| (i, clip)))
+            .collect();
+        todo.sort_by_key(|(i, _)| std::cmp::Reverse(self.indexes[*i].reader.searcher().num_docs()));
+        let total = todo.len();
+        progress(0, total);
+
+        // Candidates from each index, in parallel, as (score, index, doc)
+        // without reading the documents: reading stored documents is the
+        // slow part, so only the best candidates overall are read below.
+        // The second, nearby-only pass finds close places for category
+        // searches ("gas station" -> the Speedway around the corner).
+        let near = opts.near;
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        type Cand = (f32, usize, tantivy::DocAddress);
+        let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8).min(total.max(1));
+        let results: Vec<Result<(Vec<Cand>, Vec<Cand>)>> = std::thread::scope(|sc| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    let (todo, parsed, next, done, boxes) = (&todo, &parsed, &next, &done, &scope.boxes);
+                    sc.spawn(move || -> Result<(Vec<Cand>, Vec<Cand>)> {
+                        let mut wide = Vec::new();
+                        let mut close = Vec::new();
+                        loop {
+                            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(&(i, clip)) = todo.get(k) else { break };
+                            if cancelled() {
+                                return Err(Cancelled.into());
+                            }
+                            let idx = &self.indexes[i];
+                            let q = build_query(&idx.f, parsed);
+                            let searcher = idx.reader.searcher();
+                            let b = if clip { Some(boxes.clone()) } else { None };
+                            for (s, a) in searcher.search(&q, &weighted_collector(WIDE, near, 300.0, b.clone()))? {
+                                if s > 0.0 {
+                                    wide.push((s, i, a));
+                                }
+                            }
+                            if near.is_some() {
+                                for (s, a) in searcher.search(&q, &weighted_collector(CLOSE, near, 4.0, b))? {
+                                    if s > 0.0 {
+                                        close.push((s, i, a));
+                                    }
+                                }
+                            }
+                            let d = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                            progress(d, total);
+                        }
+                        Ok((wide, close))
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("search thread failed")))).collect()
+        });
+        let mut wide: Vec<Cand> = Vec::new();
+        let mut close: Vec<Cand> = Vec::new();
+        for r in results {
+            let (w, c) = r?;
+            wide.extend(w);
+            close.extend(c);
         }
+        if cancelled() {
+            return Err(Cancelled.into());
+        }
+        wide.sort_by(|a, b| b.0.total_cmp(&a.0));
+        close.sort_by(|a, b| b.0.total_cmp(&a.0));
+        wide.truncate(WIDE);
+        close.truncate(CLOSE);
+
+        let searchers: Vec<_> = self.indexes.iter().map(|i| i.reader.searcher()).collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut all: Vec<Hit> = Vec::new();
+        for (s, i, a) in wide.into_iter().chain(close) {
+            if !seen.insert((i, a)) {
+                continue;
+            }
+            let doc: TantivyDocument = searchers[i].doc(a)?;
+            let mut hit = rank::to_hit(&self.indexes[i].f, &doc, s);
+            hit.src = i;
+            all.push(hit);
+        }
+
         // A house number that isn't in the address data ("123 N High St"
         // when only 100 and 125 are listed): estimate its position from the
         // neighboring numbers on the same street.
@@ -318,7 +439,8 @@ impl Searcher {
         let town = street.label.split(", ").next().unwrap_or("");
         let town_norm = normalize::normalize(town);
         let mut pts: Vec<(u64, f64, f64)> = Vec::new();
-        for idx in &self.indexes {
+        // The street's own state holds its address points.
+        if let Some(idx) = self.indexes.get(street.src) {
             let f = &idx.f;
             let mut must: Vec<(Occur, Box<dyn Query>)> = vec![(
                 Occur::Must,
@@ -376,9 +498,19 @@ impl Searcher {
 
     /// Nearest address, place or street to a point ("what's here").
     pub fn reverse(&self, lat: f64, lon: f64) -> Result<Option<Hit>> {
+        self.reverse_in(lat, lon, None)
+    }
+
+    /// Like [`reverse`](Self::reverse), reading only the named indexes.
+    pub fn reverse_in(&self, lat: f64, lon: f64, only: Option<&[String]>) -> Result<Option<Hit>> {
         let mut best: Option<(f64, Hit)> = None;
+        let wanted: Vec<&OpenIndex> = self
+            .indexes
+            .iter()
+            .filter(|i| only.is_none_or(|o| o.contains(&i.name)))
+            .collect();
         for radius_deg in [0.0015, 0.005, 0.02] {
-            for idx in &self.indexes {
+            for idx in &wanted {
                 let q = bbox_query(&idx.f, lat, lon, radius_deg);
                 let searcher = idx.reader.searcher();
                 let top = searcher.search(&q, &TopDocs::with_limit(2000).order_by_score())?;
@@ -412,16 +544,28 @@ fn weighted_collector(
     limit: usize,
     near: Option<(f64, f64)>,
     scale_km: f64,
+    boxes: Option<Vec<[f64; 4]>>,
 ) -> impl tantivy::collector::Collector<Fruit = Vec<(f32, tantivy::DocAddress)>> {
     TopDocs::with_limit(limit).tweak_score(move |seg: &tantivy::SegmentReader| {
         let ff = seg.fast_fields();
         let imp = ff.f64("importance").map(|c| c.first_or_default_col(0.0)).ok();
         let lat = ff.f64("lat").map(|c| c.first_or_default_col(0.0)).ok();
         let lon = ff.f64("lon").map(|c| c.first_or_default_col(0.0)).ok();
+        let boxes = boxes.clone();
         move |doc: tantivy::DocId, score: tantivy::Score| -> f32 {
+            let (la, lo) = match (&lat, &lon) {
+                (Some(a), Some(o)) => (a.get_val(doc), o.get_val(doc)),
+                _ => (0.0, 0.0),
+            };
+            // Outside the chosen states: never a candidate.
+            if let Some(b) = &boxes {
+                if !in_boxes(b, la, lo) {
+                    return -1.0;
+                }
+            }
             let i = imp.as_ref().map_or(0.3, |c| c.get_val(doc));
-            let d = match (near, &lat, &lon) {
-                (Some((nlat, nlon)), Some(la), Some(lo)) => rank::haversine_km(nlat, nlon, la.get_val(doc), lo.get_val(doc)),
+            let d = match near {
+                Some((nlat, nlon)) if lat.is_some() => rank::haversine_km(nlat, nlon, la, lo),
                 _ => 0.0,
             };
             score * (0.4 + i as f32) / (1.0 + (d / scale_km) as f32)

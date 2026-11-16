@@ -67,15 +67,64 @@ async fn get_tile(state: St<'_>, z: u8, x: u32, y: u32) -> Result<tauri::ipc::Re
     Ok(tauri::ipc::Response::new(Vec::new()))
 }
 
+#[derive(Clone, serde::Serialize)]
+struct SearchProgress {
+    channel: String,
+    seq: u64,
+    done: usize,
+    total: usize,
+}
+
+/// Search. `states` limits it to those states' packs (cities and ZIP codes
+/// are kept only inside them); `None` searches everything installed.
+/// Each search box is a `channel`: a newer `seq` on the same channel
+/// cancels an older search still running. Progress arrives as
+/// "search-progress" events.
 #[tauri::command]
-async fn search(state: St<'_>, query: String, near: Option<(f64, f64)>, limit: Option<usize>) -> Result<Vec<rm_search::Hit>, String> {
+#[allow(clippy::too_many_arguments)]
+async fn search(
+    app: tauri::AppHandle,
+    state: St<'_>,
+    query: String,
+    near: Option<(f64, f64)>,
+    limit: Option<usize>,
+    states: Option<Vec<String>>,
+    channel: Option<String>,
+    seq: Option<u64>,
+) -> Result<Vec<rm_search::Hit>, String> {
     let st = state.inner().clone();
+    let channel = channel.unwrap_or_else(|| "default".into());
+    let seq = seq.unwrap_or(0);
+    st.search_seq.lock().unwrap().insert(channel.clone(), seq);
+    let scope = match states {
+        None => rm_search::Scope::default(),
+        Some(ids) => {
+            let inst = st.installed.lock().unwrap();
+            let boxes = ids.iter().filter_map(|id| inst.regions.get(id).and_then(|r| r.bbox)).collect();
+            rm_search::Scope {
+                indexes: Some(ids.iter().map(|id| format!("{id}-search")).collect()),
+                shared: vec!["us-areas".into()],
+                boxes,
+            }
+        }
+    };
     tokio::task::spawn_blocking(move || {
-        st.search
-            .read()
-            .unwrap()
-            .search(&query, rm_search::QueryOptions { near, limit: limit.unwrap_or(8) })
-            .map_err(err)
+        let last = std::sync::Mutex::new(std::time::Instant::now());
+        let res = st.search.read().unwrap().search_scoped(
+            &query,
+            rm_search::QueryOptions { near, limit: limit.unwrap_or(8) },
+            &scope,
+            &|done, total| {
+                // at most ~10 updates a second
+                let mut l = last.lock().unwrap();
+                if done == 0 || done == total || l.elapsed().as_millis() > 100 {
+                    *l = std::time::Instant::now();
+                    let _ = app.emit("search-progress", SearchProgress { channel: channel.clone(), seq, done, total });
+                }
+            },
+            &|| st.search_seq.lock().unwrap().get(&channel).is_some_and(|s| *s != seq),
+        );
+        res.map_err(|e| if e.is::<rm_search::Cancelled>() { "cancelled".to_string() } else { format!("{e:#}") })
     })
     .await
     .map_err(err)?
@@ -84,13 +133,34 @@ async fn search(state: St<'_>, query: String, near: Option<(f64, f64)>, limit: O
 #[tauri::command]
 async fn reverse(state: St<'_>, lat: f64, lon: f64) -> Result<Option<rm_search::Hit>, String> {
     let st = state.inner().clone();
-    tokio::task::spawn_blocking(move || st.search.read().unwrap().reverse(lat, lon).map_err(err))
+    // Only the states around the point (and the national areas list).
+    let only: Vec<String> = {
+        let inst = st.installed.lock().unwrap();
+        let pad = 0.05;
+        let mut v: Vec<String> = inst
+            .regions
+            .iter()
+            .filter(|(_, r)| {
+                r.bbox.is_none_or(|b| lon >= b[0] - pad && lat >= b[1] - pad && lon <= b[2] + pad && lat <= b[3] + pad)
+            })
+            .map(|(id, _)| format!("{id}-search"))
+            .collect();
+        v.push("us-areas".into());
+        v
+    };
+    tokio::task::spawn_blocking(move || st.search.read().unwrap().reverse_in(lat, lon, Some(&only)).map_err(err))
         .await
         .map_err(err)?
 }
 
+#[derive(Clone, serde::Serialize)]
+struct RouteProgress {
+    done: usize,
+    total: usize,
+}
+
 #[tauri::command]
-async fn route(state: St<'_>, request: routing::RouteRequest) -> Result<Vec<routing::RouteOption>, String> {
+async fn route(app: tauri::AppHandle, state: St<'_>, request: routing::RouteRequest) -> Result<Vec<routing::RouteOption>, String> {
     let st = state.inner().clone();
     let has_tiles = st.installed.lock().unwrap().regions.values().any(|r| r.components.contains_key("routing"));
     if !has_tiles {
@@ -101,7 +171,10 @@ async fn route(state: St<'_>, request: routing::RouteRequest) -> Result<Vec<rout
         let v = guard.as_ref().ok_or_else(|| {
             st.routing_error.lock().unwrap().clone().unwrap_or_else(|| "Routing is not available.".into())
         })?;
-        routing::plan(v, &request).map_err(err)
+        routing::plan_with(v, &request, &|done, total| {
+            let _ = app.emit("route-progress", RouteProgress { done, total });
+        })
+        .map_err(err)
     })
     .await
     .map_err(err)?

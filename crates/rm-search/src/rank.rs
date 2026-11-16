@@ -37,6 +37,9 @@ pub struct Hit {
     pub(crate) number: String,
     #[serde(skip)]
     pub(crate) importance: f64,
+    /// Which open index the hit came from.
+    #[serde(skip)]
+    pub(crate) src: usize,
 }
 
 pub(crate) struct ParsedQuery {
@@ -110,6 +113,7 @@ pub(crate) fn to_hit(f: &Fields, doc: &TantivyDocument, bm25: f32) -> Hit {
         norm: get_str(doc, f.norm),
         number: get_str(doc, f.number),
         importance: get_f64(doc, f.importance),
+        src: 0,
     }
 }
 
@@ -439,6 +443,7 @@ pub(crate) fn parse_coordinates(q: &str) -> Option<Hit> {
         norm: String::new(),
         number: String::new(),
         importance: 1.0,
+        src: 0,
     })
 }
 

@@ -337,7 +337,14 @@ fn road_share(r: &RouteOption) -> HashMap<String, f64> {
     m
 }
 
+#[allow(dead_code)]
 pub fn plan(v: &Valhalla, req: &RouteRequest) -> Result<Vec<RouteOption>> {
+    plan_with(v, req, &|_, _| {})
+}
+
+/// Plans routes; `progress(done, total)` is called as each of the route
+/// searches (fastest + alternatives, shortest, no highways) finishes.
+pub fn plan_with(v: &Valhalla, req: &RouteRequest, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<RouteOption>> {
     if req.locations.len() < 2 {
         bail!("Choose a start and a destination.");
     }
@@ -351,8 +358,24 @@ pub fn plan(v: &Valhalla, req: &RouteRequest) -> Result<Vec<RouteOption>> {
             jobs.push(("nohighway", base_request(req, 0, true, false)));
         }
     }
+    let total = jobs.len();
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    progress(0, total);
     let results: Vec<(&str, Result<Value>)> = std::thread::scope(|s| {
-        let handles: Vec<_> = jobs.iter().map(|(k, body)| (*k, s.spawn(move || v.request("route", body)))).collect();
+        let handles: Vec<_> = jobs
+            .iter()
+            .map(|(k, body)| {
+                let done = &done;
+                (
+                    *k,
+                    s.spawn(move || {
+                        let r = v.request("route", body);
+                        progress(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, total);
+                        r
+                    }),
+                )
+            })
+            .collect();
         handles.into_iter().map(|(k, h)| (k, h.join().unwrap_or_else(|_| Err(anyhow!("routing crashed"))))).collect()
     });
 

@@ -1,19 +1,26 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Hit } from "../api";
-import { kindLabel, prettyCategory } from "../format";
+import { formatPhone, kindLabel, prettyCategory } from "../format";
 import { CloseIcon, GlobeIcon, PhoneIcon, PinIcon, RouteIcon } from "./Icons";
 
 type Props = {
   hit: Hit;
   onClose: () => void;
   onDirections: (hit: Hit) => void;
+  /** Shown when the place was opened from a list of results. */
+  onBack?: () => void;
 };
 
-export function PlaceCard({ hit, onClose, onDirections }: Props) {
+export function PlaceCard({ hit, onClose, onDirections, onBack }: Props) {
   const sub = hit.kind === "place" ? prettyCategory(hit.category) : kindLabel(hit.kind);
   const coords = `${hit.lat.toFixed(5)}, ${hit.lon.toFixed(5)}`;
   return (
     <div className="card place-card">
+      {onBack && (
+        <button className="link-btn small back-btn" onClick={onBack}>
+          ← Back to results
+        </button>
+      )}
       <div className="card-head">
         <div>
           <h2>{hit.name}</h2>
@@ -42,16 +49,23 @@ export function PlaceCard({ hit, onClose, onDirections }: Props) {
             <PinIcon /> <span>{hit.label}</span>
           </li>
         )}
+        {hit.kind === "place" && !hit.phone && !hit.website && (
+          <li className="muted small">No phone number or website in the map data.</li>
+        )}
         {hit.phone && (
           <li>
-            <PhoneIcon /> <span>{formatPhone(hit.phone)}</span>
+            <PhoneIcon />{" "}
+            <span className="selectable">{formatPhone(hit.phone)}</span>
+            <button className="link-btn small" onClick={() => navigator.clipboard?.writeText(formatPhone(hit.phone!))}>
+              Copy
+            </button>
           </li>
         )}
         {hit.website && (
           <li>
             <GlobeIcon />{" "}
             <a href="#" onClick={(e) => { e.preventDefault(); openUrl(hit.website!).catch(() => {}); }}>
-              {hit.website.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
+              {hit.website.replace(/^https?:\/\/(www\.)?/, "").replace(/[?#].*$/, "").replace(/\/$/, "")}
             </a>
           </li>
         )}
@@ -59,10 +73,4 @@ export function PlaceCard({ hit, onClose, onDirections }: Props) {
       </ul>
     </div>
   );
-}
-
-function formatPhone(p: string): string {
-  const d = p.replace(/\D/g, "");
-  const n = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
-  return n.length === 10 ? `(${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6)}` : p;
 }

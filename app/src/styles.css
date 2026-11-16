@@ -330,3 +330,36 @@ details.import-box[open] > summary strong::before { content: "▾ "; }
 details.import-box { display: block; }
 details.import-box > * + * { margin-top: 8px; }
 .region-parts .part { white-space: nowrap; }
+
+/* ---- search scope, results and progress ---- */
+.scope { position: relative; margin: 6px 0 2px; }
+.scope-btn { display: flex; align-items: center; gap: 4px; width: 100%; padding: 5px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; font-size: 12.5px; text-align: left; }
+.scope-btn:hover { border-color: var(--border); background: var(--bg-hover); }
+.scope-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.scope-caret { color: var(--muted); }
+.scope-menu { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.scope-opt { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; font-size: 13px; }
+.scope-opt input { margin-top: 3px; }
+.scope-pick { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
+.scope-pick-tools { display: flex; gap: 8px; align-items: center; }
+.scope-pick-tools input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: inherit; font: inherit; font-size: 13px; }
+.scope-list { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; columns: 2; column-gap: 8px; font-size: 13px; }
+.scope-list label { display: flex; gap: 6px; align-items: center; padding: 2px 0; cursor: pointer; break-inside: avoid; }
+.search-progress { display: flex; flex-direction: column; gap: 3px; margin: 6px 2px; }
+.pad-y { padding: 8px 0; }
+.bar.thin { height: 4px; }
+.bar > div.indeterminate { width: 30%; animation: rm-indeterminate 1.1s ease-in-out infinite; }
+@keyframes rm-indeterminate { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+.dropdown-action { color: var(--accent); font-size: 13px; cursor: pointer; }
+.dropdown-action:hover { background: var(--bg-hover); }
+.dropdown-note { cursor: default; }
+.results { margin-top: 8px; }
+.results-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; padding: 2px 2px 6px; }
+.results-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; }
+.results-list li { display: flex; gap: 10px; align-items: flex-start; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+.results-list li:hover, .results-list li.hot { background: var(--bg-hover); }
+.result-num { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #d1453b; color: #fff; font-size: 12px; font-weight: 600; display: grid; place-items: center; margin-top: 1px; }
+.results-list li.hot .result-num { background: #b3261e; transform: scale(1.12); }
+.back-btn { align-self: flex-start; margin-bottom: 4px; }
+.selectable { user-select: text; }
+.place-card .facts a { overflow-wrap: anywhere; }

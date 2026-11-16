@@ -27,6 +27,8 @@ export type View = { center: [number, number]; zoom: number };
 
 const ROUTE_SRC = "rm-routes";
 const POINT_SRC = "rm-point";
+const RESULT_SRC = "rm-results";
+const RESULT_LAYERS = ["rm-result-dot", "rm-result-num"];
 
 function pinElement(cls: string, text = ""): HTMLElement {
   const el = document.createElement("div");
@@ -47,6 +49,11 @@ export class MapController {
   private point: [number, number] | null = null;
   private placeMarker: maplibregl.Marker | null = null;
   private wpMarkers: maplibregl.Marker[] = [];
+  private results: Hit[] = [];
+  private resultSelected: string | null = null;
+  private resultHover: string | null = null;
+  onResultClick: (id: string) => void = () => {};
+  onResultHover: (id: string | null) => void = () => {};
   onRouteClick: (id: number) => void = () => {};
   onContextMenu: (lat: number, lon: number, x: number, y: number) => void = () => {};
   onPoiClick: (name: string, lat: number, lon: number) => void = () => {};
@@ -75,6 +82,13 @@ export class MapController {
       this.onMove({ center: [c.lng, c.lat], zoom: this.map.getZoom() });
     });
     this.map.on("click", (e) => {
+      const pins = this.map.getLayer("rm-result-dot")
+        ? this.map.queryRenderedFeatures(e.point, { layers: RESULT_LAYERS })
+        : [];
+      if (pins.length) {
+        this.onResultClick(String(pins[0].properties?.id));
+        return;
+      }
       const routeHits = this.map.queryRenderedFeatures(e.point, { layers: ["rm-route-alt", "rm-route-sel"] });
       if (routeHits.length) {
         this.onRouteClick(Number(routeHits[0].properties?.id ?? 0));
@@ -92,10 +106,23 @@ export class MapController {
         this.onPoiClick(String(f.properties.name), lat, lon);
       }
     });
-    for (const id of ["rm-route-alt", "rm-route-sel"]) {
+    for (const id of ["rm-route-alt", "rm-route-sel", ...RESULT_LAYERS]) {
       this.map.on("mouseenter", id, () => (this.map.getCanvas().style.cursor = "pointer"));
       this.map.on("mouseleave", id, () => (this.map.getCanvas().style.cursor = ""));
     }
+    this.map.on("mousemove", "rm-result-dot", (e) => {
+      const id = String(e.features?.[0]?.properties?.id ?? "");
+      if (id && id !== this.resultHover) {
+        this.resultHover = id;
+        this.updateResults();
+        this.onResultHover(id);
+      }
+    });
+    this.map.on("mouseleave", "rm-result-dot", () => {
+      this.resultHover = null;
+      this.updateResults();
+      this.onResultHover(null);
+    });
   }
 
   private addOverlays() {
@@ -149,6 +176,33 @@ export class MapController {
         },
         labelLayer,
       );
+      // Search results: numbered pins, the hovered or chosen one larger.
+      m.addSource(RESULT_SRC, { type: "geojson", data: this.resultData() });
+      m.addLayer({
+        id: "rm-result-dot",
+        type: "circle",
+        source: RESULT_SRC,
+        paint: {
+          "circle-radius": ["case", ["get", "hot"], 13, 10],
+          "circle-color": ["case", ["get", "hot"], "#b3261e", "#d1453b"],
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2,
+        },
+      });
+      m.addLayer({
+        id: "rm-result-num",
+        type: "symbol",
+        source: RESULT_SRC,
+        layout: {
+          "text-field": ["get", "n"],
+          "text-font": ["Noto Sans Medium"],
+          "text-size": 12,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "symbol-sort-key": ["get", "order"],
+        },
+        paint: { "text-color": "#ffffff" },
+      });
       m.addLayer({
         id: "rm-point",
         type: "circle",
@@ -161,6 +215,58 @@ export class MapController {
         },
       });
     }
+  }
+
+  private resultData(): FeatureCollection {
+    return {
+      type: "FeatureCollection",
+      features: this.results
+        .map((h, i) => ({ h, i }))
+        // the chosen one is shown by the place marker instead
+        .filter(({ h }) => h.id !== this.resultSelected)
+        // first results drawn on top
+        .reverse()
+        .map(({ h, i }) => ({
+          type: "Feature" as const,
+          properties: { id: h.id, n: String(i + 1), order: i, hot: h.id === this.resultHover },
+          geometry: { type: "Point" as const, coordinates: [h.lon, h.lat] },
+        })),
+    };
+  }
+
+  private updateResults() {
+    (this.map.getSource(RESULT_SRC) as GeoJSONSource | undefined)?.setData(this.resultData());
+  }
+
+  /** Shows search results as numbered pins. */
+  setResults(hits: Hit[], selectedId: string | null = null) {
+    this.results = hits;
+    this.resultSelected = selectedId;
+    this.updateResults();
+  }
+
+  /** Highlights the pin of a result (when its row is hovered in the list). */
+  hoverResult(id: string | null) {
+    this.resultHover = id;
+    this.updateResults();
+  }
+
+  /** Frames a set of results: one is zoomed to, several are fitted. */
+  fitHits(hits: Hit[], zoomForOne: number) {
+    if (!hits.length) return;
+    if (hits.length === 1) {
+      this.flyTo(hits[0].lat, hits[0].lon, zoomForOne);
+      return;
+    }
+    const b = new maplibregl.LngLatBounds([hits[0].lon, hits[0].lat], [hits[0].lon, hits[0].lat]);
+    hits.forEach((h) => b.extend([h.lon, h.lat]));
+    this.map.fitBounds(b, { padding: { top: 70, bottom: 50, left: 50, right: 50 }, maxZoom: 15 });
+  }
+
+  /** [west, south, east, north] of the visible map. */
+  bounds(): Bbox {
+    const b = this.map.getBounds();
+    return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   }
 
   private routeData(): FeatureCollection {

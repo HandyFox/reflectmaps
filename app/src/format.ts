@@ -67,3 +67,10 @@ export function zoomFor(kind: string): number {
       return 16.5;
   }
 }
+
+/** (614) 555-1234 for 10-digit US numbers, unchanged otherwise. */
+export function formatPhone(p: string): string {
+  const d = p.replace(/\D/g, "");
+  const n = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+  return n.length === 10 ? `(${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6)}` : p;
+}

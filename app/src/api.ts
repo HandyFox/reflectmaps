@@ -97,6 +97,11 @@ export type ImportReport = {
   first_region?: string | null;
 };
 
+export type SearchProgress = { channel: string; seq: number; done: number; total: number };
+
+/** True for the error of a search replaced by a newer one. */
+export const isCancelled = (e: unknown) => String(e).includes("cancelled");
+
 export type QueueStatus = {
   items: string[];
   active: string[];
@@ -131,8 +136,19 @@ export type RouteRequest = {
 export const api = {
   status: () => invoke<Status>("app_status"),
   tile: (z: number, x: number, y: number) => invoke<ArrayBuffer>("get_tile", { z, x, y }),
-  search: (query: string, near: [number, number] | null, limit = 8) =>
-    invoke<Hit[]>("search", { query, near, limit }),
+  /** `states` null = all; `channel` + `seq` let a newer search cancel an older one. */
+  search: (
+    query: string,
+    near: [number, number] | null,
+    limit = 8,
+    states: string[] | null = null,
+    channel = "default",
+    seq = 0,
+  ) => invoke<Hit[]>("search", { query, near, limit, states, channel, seq }),
+  onSearchProgress: (cb: (p: SearchProgress) => void): Promise<UnlistenFn> =>
+    listen<SearchProgress>("search-progress", (e) => cb(e.payload)),
+  onRouteProgress: (cb: (p: { done: number; total: number }) => void): Promise<UnlistenFn> =>
+    listen<{ done: number; total: number }>("route-progress", (e) => cb(e.payload)),
   reverse: (lat: number, lon: number) => invoke<Hit | null>("reverse", { lat, lon }),
   route: (request: RouteRequest) => invoke<RouteOption[]>("route", { request }),
   catalog: (refresh: boolean) => invoke<CatalogResult>("get_catalog", { refresh }),

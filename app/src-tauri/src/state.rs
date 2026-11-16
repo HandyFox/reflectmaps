@@ -86,6 +86,8 @@ pub struct AppState {
     pub installed: Mutex<Installed>,
     pub cancel: Mutex<HashSet<String>>,
     pub busy: Mutex<HashSet<String>>,
+    /// Newest search number per search box, to cancel older searches.
+    pub search_seq: Mutex<std::collections::HashMap<String, u64>>,
     pub routing: Mutex<Option<crate::routing::Valhalla>>,
     pub routing_error: Mutex<Option<String>>,
     /// Running from an external drive with its data next to the program.
@@ -105,6 +107,7 @@ impl AppState {
             routing: Mutex::new(None),
             routing_error: Mutex::new(None),
             portable: false,
+            search_seq: Default::default(),
             queue: Default::default(),
         }
     }

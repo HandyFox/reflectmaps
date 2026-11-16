@@ -71,6 +71,13 @@ state lines when all the directions packs come from the same release.
   directions, with a preview, paper size and orientation, a sharp map image,
   scale bar and north arrow. Directions print with an overview map and a
   numbered step table. Pick a PDF printer to save a PDF instead.
+- **Search area**: a "Search in" picker under the search box: *Near the map*
+  (states in view and next to it, following the map), states you tick, or
+  all states. Fewer states make searching faster. The Directions boxes use
+  the same choice, with a "Search all states" fallback; routes themselves
+  always cross any downloaded states.
+- **Results on the map**: press Enter to see up to 20 results as numbered
+  pins; click a pin or a row for the address, phone number and website.
 - **Downloads**: pick states one by one or select several (or all) and
   download them in a queue with overall progress, pause/resume and Update
   all; each state has map, search and directions parts that download,
