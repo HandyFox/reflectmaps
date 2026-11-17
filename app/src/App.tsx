@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, isCancelled, type Bbox, type CatalogRegion, type Hit, type ImportReport, type Progress, type RouteOption, type Status } from "./api";
-import { Directions, type AvoidOptions } from "./components/Directions";
+import { Directions, MAX_POINTS, type AvoidOptions } from "./components/Directions";
+import { SavedPlaces } from "./components/SavedPlaces";
+import { useUserData } from "./userData";
 import { Downloads } from "./components/Downloads";
 import { DownloadIcon, MoonIcon, PrintIcon, RouteIcon, SearchIcon, SunIcon } from "./components/Icons";
 import { PrintDialog, type PrintJob } from "./components/PrintDialog";
@@ -75,6 +77,14 @@ export default function App() {
   const [catalogStamp, setCatalogStamp] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [printJob, setPrintJob] = useState<PrintJob | null>(null);
+  const user = useUserData();
+  const extras = { history: user.history, places: user.places, onForget: user.forget, onClearHistory: user.clearHistory };
+  const [saveIntent, setSaveIntent] = useState<string | null>(null);
+  const [showStars, setShowStarsState] = useState(() => localStorage.getItem("rm.stars") !== "0");
+  const setShowStars = (v: boolean) => {
+    setShowStarsState(v);
+    localStorage.setItem("rm.stars", v ? "1" : "0");
+  };
   const [scope, setScopeState] = useState<SearchScope>(loadScope);
   const [viewBox, setViewBox] = useState<Bbox | null>(null);
   const [results, setResults] = useState<{ query: string; hits: Hit[]; scoped: boolean } | null>(null);
@@ -234,10 +244,25 @@ export default function App() {
       const h = results?.hits.find((x) => x.id === id);
       if (h) {
         setPlace(h);
+        user.remember([h]);
         setTab("search");
       }
     };
   }, [results]);
+
+  // ---- address book on the map ----
+  useEffect(() => {
+    ctrl.current?.setSaved(showStars ? user.places.map((p) => ({ id: p.id, name: p.name, lat: p.hit.lat, lon: p.hit.lon })) : []);
+    if (ctrl.current) {
+      ctrl.current.onSavedClick = (id) => {
+        const p = user.places.find((x) => x.id === id);
+        if (!p) return;
+        setPlace({ ...p.hit, name: p.name, label: p.hit.name !== p.name ? [p.hit.name, p.hit.label].filter(Boolean).join(", ") : p.hit.label });
+        setResults(null);
+        setTab("search");
+      };
+    }
+  }, [user.places, showStars]);
 
   // ---- directions ----
   const onDrag = useCallback(
@@ -273,6 +298,7 @@ export default function App() {
         if (seq !== routeSeq.current) return;
         setRoutes(r);
         setSelected(0);
+        user.remember([...pts].reverse());
         if (r[0]) ctrl.current?.fitCoords(r[0].coordinates, 70);
       })
       .catch((e) => {
@@ -298,7 +324,35 @@ export default function App() {
   };
 
   // ---- context menu ----
-  const menuAction = async (action: "from" | "to" | "here" | "copy") => {
+  /** Adds a stop: fills an empty start/destination, else goes where it adds the least distance. */
+  const addStop = (h: Hit) => {
+    const w = waypoints;
+    const empty = w.findIndex((x) => !x);
+    let next: (Hit | null)[];
+    if (empty >= 0) {
+      next = w.map((x, i) => (i === empty ? h : x));
+    } else if (w.length >= MAX_POINTS) {
+      notify(`A route can have at most ${MAX_POINTS} points`);
+      return;
+    } else {
+      const pts = w as Hit[];
+      const d = (a: Hit, b: Hit) => Math.hypot((a.lat - b.lat) * 111, (a.lon - b.lon) * 111 * Math.cos((a.lat * Math.PI) / 180));
+      let best = 1;
+      let bestCost = Infinity;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const cost = d(pts[i], h) + d(h, pts[i + 1]) - d(pts[i], pts[i + 1]);
+        if (cost < bestCost) {
+          bestCost = cost;
+          best = i + 1;
+        }
+      }
+      next = [...pts.slice(0, best), h, ...pts.slice(best)];
+    }
+    setWaypoints(next);
+    setTab("directions");
+  };
+
+  const menuAction = async (action: "from" | "to" | "stop" | "save" | "here" | "copy") => {
     if (!menu) return;
     const { lat, lon } = menu;
     setMenu(null);
@@ -315,6 +369,13 @@ export default function App() {
     } else if (action === "from") {
       setWaypoints((w) => [h, ...w.slice(1)]);
       setTab("directions");
+    } else if (action === "stop") {
+      addStop(h);
+    } else if (action === "save") {
+      setResults(null);
+      setPlace(h);
+      setSaveIntent(h.id);
+      setTab("search");
     } else {
       directionsTo(h);
     }
@@ -428,9 +489,11 @@ export default function App() {
                 placeholder="Search places and addresses"
                 near={near}
                 states={searchStates}
+                extras={extras}
                 onSelect={(h) => {
                   setResults(null);
                   setPlace(h);
+                  user.remember([h]);
                   ctrl.current?.flyTo(h.lat, h.lon, zoomFor(h.kind));
                 }}
                 onSubmit={(q) => runResults(q)}
@@ -449,6 +512,16 @@ export default function App() {
                   onClose={() => setPlace(null)}
                   onDirections={(h) => directionsTo(h)}
                   onBack={results ? () => setPlace(null) : undefined}
+                  saved={user.savedFor(place)}
+                  onSave={(name) => {
+                    user.save(place, name);
+                    notify(`Saved “${name}” to your address book`);
+                  }}
+                  onUnsave={(id) => {
+                    user.unsave(id);
+                    notify("Removed from your address book");
+                  }}
+                  startSaving={saveIntent === place.id}
                 />
               )}
               {!place && results && (
@@ -460,6 +533,7 @@ export default function App() {
                   onHover={setHoverId}
                   onPick={(h) => {
                     setPlace(h);
+                    user.remember([h]);
                     setHoverId(null);
                   }}
                   onClose={() => setResults(null)}
@@ -467,10 +541,22 @@ export default function App() {
                 />
               )}
               {!place && !results && (
-                <div className="tips muted small">
-                  <p>Try a business name, a full address like “123 N High St Columbus”, a city, a ZIP code, or a category like “coffee” or “gas”.</p>
-                  <p>Right-click the map for directions from or to any point.</p>
-                </div>
+                <>
+                  <div className="tips muted small">
+                    <p>Try a business name, a full address like “123 N High St Columbus”, a city, a ZIP code, or a category like “coffee” or “gas”.</p>
+                    <p>Right-click the map for directions, to add a stop to your route, or to save a place.</p>
+                  </div>
+                  <SavedPlaces
+                    user={user}
+                    showStars={showStars}
+                    setShowStars={setShowStars}
+                    notify={notify}
+                    onOpen={(h) => {
+                      setPlace(h);
+                      ctrl.current?.flyTo(h.lat, h.lon, zoomFor(h.kind));
+                    }}
+                  />
+                </>
               )}
             </>
           )}
@@ -491,6 +577,7 @@ export default function App() {
               error={routeError}
               near={near}
               states={searchStates}
+              extras={extras}
               progress={routeProgress}
               scopePicker={
                 <ScopePicker scope={scope} setScope={setScope} regions={status?.installed.regions ?? {}} view={viewBox} />
@@ -513,6 +600,8 @@ export default function App() {
               importReport={importReport}
               onDismissReport={() => setImportReport(null)}
               catalogStamp={catalogStamp}
+              personal={{ history: user.history.length, places: user.places.length }}
+              onClearPersonal={user.clearAll}
             />
           )}
         </section>
@@ -539,6 +628,9 @@ export default function App() {
           <ul className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
             <li onClick={() => menuAction("from")}>Directions from here</li>
             <li onClick={() => menuAction("to")}>Directions to here</li>
+            <li onClick={() => menuAction("stop")}>Add to route as a stop</li>
+            <li className="sep" />
+            <li onClick={() => menuAction("save")}>Save this place…</li>
             <li onClick={() => menuAction("here")}>What’s here?</li>
             <li onClick={() => menuAction("copy")}>Copy coordinates</li>
           </ul>

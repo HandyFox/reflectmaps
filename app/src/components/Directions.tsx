@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { Hit, Maneuver, RouteOption } from "../api";
 import { formatDuration, formatMiles } from "../format";
-import { CloseIcon, PlusIcon, SwapIcon } from "./Icons";
-import { SearchBox } from "./SearchBox";
+import { CloseIcon, GripIcon, PlusIcon, SwapIcon } from "./Icons";
+import { SearchBox, type SearchExtras } from "./SearchBox";
 
 export type AvoidOptions = { avoid_tolls: boolean; avoid_highways: boolean; avoid_ferries: boolean };
 
@@ -24,9 +24,21 @@ type Props = {
   scopePicker: ReactNode;
   onStep: (m: Maneuver) => void;
   onPrint: () => void;
+  /** History and saved places for the From/To boxes. */
+  extras: SearchExtras;
 };
 
-const MAX_POINTS = 6;
+export const MAX_POINTS = 10;
+
+type Drag = { from: number; over: number; dy: number; pitch: number };
+
+/** Moves item `from` to position `to`. */
+export function move<T>(list: T[], from: number, to: number): T[] {
+  const next = [...list];
+  const [m] = next.splice(from, 1);
+  next.splice(to, 0, m);
+  return next;
+}
 
 export function Directions(p: Props) {
   const { waypoints, setWaypoints } = p;
@@ -38,11 +50,69 @@ export function Directions(p: Props) {
   const route = p.routes.find((r) => r.id === p.selected);
   const last = waypoints.length - 1;
 
+  // ---- reordering by dragging the grip (pointer events, which also work
+  // where the window handles file drops) ----
+  const rows = useRef<(HTMLDivElement | null)[]>([]);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const dragRef = useRef<Drag | null>(null);
+  const startDrag = (i: number, e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const rects = rows.current.slice(0, waypoints.length).map((r) => r!.getBoundingClientRect());
+    const pitch = rects.length > 1 ? rects[1].top - rects[0].top : rects[0].height;
+    const startY = e.clientY;
+    const set = (d: Drag | null) => {
+      dragRef.current = d;
+      setDrag(d);
+    };
+    set({ from: i, over: i, dy: 0, pitch });
+    const onMove = (ev: PointerEvent) => {
+      const dy = ev.clientY - startY;
+      const mid = rects[i].top + rects[i].height / 2 + dy;
+      let over = rects.findIndex((r) => mid < r.top + r.height / 2 + pitch / 2);
+      if (over < 0) over = rects.length - 1;
+      set({ from: i, over, dy, pitch });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const d = dragRef.current;
+      set(null);
+      if (d && d.over !== d.from) setWaypoints(move(waypoints, d.from, d.over));
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+  const shift = (j: number): string | undefined => {
+    if (!drag) return undefined;
+    const { from, over, dy, pitch } = drag;
+    if (j === from) return `translateY(${dy}px)`;
+    if (from < over && j > from && j <= over) return `translateY(${-pitch}px)`;
+    if (from > over && j >= over && j < from) return `translateY(${pitch}px)`;
+    return undefined;
+  };
+
   return (
     <div className="directions">
       <div className="waypoints">
         {waypoints.map((w, i) => (
-          <div className="wp-row" key={i}>
+          <div
+            className={`wp-row${drag?.from === i ? " dragging" : ""}${drag ? " drag-active" : ""}`}
+            key={i}
+            ref={(el) => {
+              rows.current[i] = el;
+            }}
+            style={{ transform: shift(i) }}
+          >
+            <span
+              className="wp-grip"
+              title="Drag to reorder"
+              onPointerDown={(e) => startDrag(i, e)}
+              role="button"
+              aria-label={`Move ${i === 0 ? "start" : i === last ? "destination" : `stop ${i}`}`}
+            >
+              <GripIcon />
+            </span>
             <SearchBox
               compact
               dot={i === 0 ? "start" : i === last ? "end" : "stop"}
@@ -51,6 +121,7 @@ export function Directions(p: Props) {
               near={p.near}
               states={p.states}
               channel={`wp${i}`}
+              extras={p.extras}
               onSelect={(h) => update(i, h)}
               onClear={() => update(i, null)}
             />

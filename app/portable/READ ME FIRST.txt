@@ -26,6 +26,9 @@ GETTING MAP DATA
   States can also be imported from files copied off another computer.
 
 MAKING COPIES OF THIS DRIVE
+  Your address history and address book are stored on this drive too. To
+  give a copy away without them, first open Downloads and click "Clear
+  personal data" (export the address book as CSV first to keep it).
   Close ReflectMaps, then copy this whole ReflectMaps folder to the other
   drive (drag it in File Explorer). The copy works on any PC under any
   drive letter. Then open ReflectMaps on the copy, go to Downloads and

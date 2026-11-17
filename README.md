@@ -78,6 +78,16 @@ state lines when all the directions packs come from the same release.
   always cross any downloaded states.
 - **Results on the map**: press Enter to see up to 20 results as numbered
   pins; click a pin or a row for the address, phone number and website.
+- **Stops**: up to 10 points per route; drag the grip beside any stop
+  (start and destination included) to reorder. Right-click the map to start,
+  end or *Add to route as a stop* (it goes where it adds the least driving).
+- **History and address book**: places you open or route to are remembered
+  (last 50) and offered when you click an empty search or From/To box. Save
+  any place under your own name (star button, or right-click > Save this
+  place); saved places show as stars on the map, match as you type, and
+  import/export as CSV (rows without coordinates are looked up by address).
+  *Downloads > Clear personal data* deletes both, e.g. before copying a
+  portable drive.
 - **Downloads**: pick states one by one or select several (or all) and
   download them in a queue with overall progress, pause/resume and Update
   all; each state has map, search and directions parts that download,

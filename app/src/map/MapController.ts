@@ -29,6 +29,9 @@ const ROUTE_SRC = "rm-routes";
 const POINT_SRC = "rm-point";
 const RESULT_SRC = "rm-results";
 const RESULT_LAYERS = ["rm-result-dot", "rm-result-num"];
+const SAVED_SRC = "rm-saved";
+
+export type SavedPin = { id: string; name: string; lat: number; lon: number };
 
 function pinElement(cls: string, text = ""): HTMLElement {
   const el = document.createElement("div");
@@ -53,6 +56,8 @@ export class MapController {
   private resultSelected: string | null = null;
   private resultHover: string | null = null;
   onResultClick: (id: string) => void = () => {};
+  onSavedClick: (id: string) => void = () => {};
+  private saved: SavedPin[] = [];
   onResultHover: (id: string | null) => void = () => {};
   onRouteClick: (id: number) => void = () => {};
   onContextMenu: (lat: number, lon: number, x: number, y: number) => void = () => {};
@@ -89,6 +94,11 @@ export class MapController {
         this.onResultClick(String(pins[0].properties?.id));
         return;
       }
+      const stars = this.map.getLayer("rm-saved") ? this.map.queryRenderedFeatures(e.point, { layers: ["rm-saved"] }) : [];
+      if (stars.length) {
+        this.onSavedClick(String(stars[0].properties?.id));
+        return;
+      }
       const routeHits = this.map.queryRenderedFeatures(e.point, { layers: ["rm-route-alt", "rm-route-sel"] });
       if (routeHits.length) {
         this.onRouteClick(Number(routeHits[0].properties?.id ?? 0));
@@ -106,7 +116,7 @@ export class MapController {
         this.onPoiClick(String(f.properties.name), lat, lon);
       }
     });
-    for (const id of ["rm-route-alt", "rm-route-sel", ...RESULT_LAYERS]) {
+    for (const id of ["rm-route-alt", "rm-route-sel", "rm-saved", ...RESULT_LAYERS]) {
       this.map.on("mouseenter", id, () => (this.map.getCanvas().style.cursor = "pointer"));
       this.map.on("mouseleave", id, () => (this.map.getCanvas().style.cursor = ""));
     }
@@ -176,6 +186,26 @@ export class MapController {
         },
         labelLayer,
       );
+      // Saved places: gold stars, named when zoomed in.
+      if (!m.hasImage("rm-star")) m.addImage("rm-star", starImage(), { pixelRatio: 2 });
+      m.addSource(SAVED_SRC, { type: "geojson", data: this.savedData() });
+      m.addLayer({
+        id: "rm-saved",
+        type: "symbol",
+        source: SAVED_SRC,
+        layout: {
+          "icon-image": "rm-star",
+          "icon-allow-overlap": true,
+          "text-field": ["step", ["zoom"], "", 12, ["get", "name"]],
+          "text-font": ["Noto Sans Medium"],
+          "text-size": 12,
+          "text-offset": [0, 1.3],
+          "text-anchor": "top",
+          "text-optional": true,
+        },
+        paint: { "text-color": "#6b4e00", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      });
+
       // Search results: numbered pins, the hovered or chosen one larger.
       m.addSource(RESULT_SRC, { type: "geojson", data: this.resultData() });
       m.addLayer({
@@ -215,6 +245,23 @@ export class MapController {
         },
       });
     }
+  }
+
+  private savedData(): FeatureCollection {
+    return {
+      type: "FeatureCollection",
+      features: this.saved.map((p) => ({
+        type: "Feature" as const,
+        properties: { id: p.id, name: p.name },
+        geometry: { type: "Point" as const, coordinates: [p.lon, p.lat] },
+      })),
+    };
+  }
+
+  /** Stars for the address book (an empty list hides them). */
+  setSaved(pins: SavedPin[]) {
+    this.saved = pins;
+    (this.map.getSource(SAVED_SRC) as GeoJSONSource | undefined)?.setData(this.savedData());
   }
 
   private resultData(): FeatureCollection {
@@ -372,4 +419,31 @@ export class MapController {
   destroy() {
     this.map.remove();
   }
+}
+
+/** A gold star with a white edge, drawn at 2x for sharp screens. */
+function starImage(): ImageData {
+  const size = 44;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d")!;
+  const cx = size / 2;
+  const cy = size / 2 + 1;
+  g.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? 19 : 8.5;
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    g.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
+  }
+  g.closePath();
+  g.lineJoin = "round";
+  g.lineWidth = 4;
+  g.strokeStyle = "#ffffff";
+  g.stroke();
+  g.fillStyle = "#f2b200";
+  g.fill();
+  g.lineWidth = 1.2;
+  g.strokeStyle = "#a27400";
+  g.stroke();
+  return g.getImageData(0, 0, size, size);
 }

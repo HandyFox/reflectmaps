@@ -38,6 +38,9 @@ type Props = {
   onDismissReport: () => void;
   /** Changes when an import brought a new catalog.json. */
   catalogStamp: number;
+  /** Address history / address book sizes, and wiping them. */
+  personal: { history: number; places: number };
+  onClearPersonal: () => Promise<void>;
 };
 
 type Row = {
@@ -51,7 +54,19 @@ type Row = {
 
 const LIVE = (p: Progress) => !["done", "error", "cancelled"].includes(p.stage);
 
-export function Downloads({ status, progress, onChanged, notify, onImport, importing, importReport, onDismissReport, catalogStamp }: Props) {
+export function Downloads({
+  status,
+  progress,
+  onChanged,
+  notify,
+  onImport,
+  importing,
+  importReport,
+  onDismissReport,
+  catalogStamp,
+  personal,
+  onClearPersonal,
+}: Props) {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [online, setOnline] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -196,6 +211,20 @@ export function Downloads({ status, progress, onChanged, notify, onImport, impor
     notify(`${name} removed`);
     onChanged();
     loadStorage();
+  };
+
+  const clearPersonal = async () => {
+    const ok = await ask(
+      `Delete your address history (${personal.history}) and address book (${personal.places} saved place${personal.places === 1 ? "" : "s"}) from ${storage?.portable ? "this drive" : "this computer"}?\n\nDo this before copying the drive for someone else. Export the address book first if you want to keep it.`,
+      { title: "Clear personal data", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
+    );
+    if (!ok) return;
+    try {
+      await onClearPersonal();
+      notify("Address history and address book deleted");
+    } catch (e) {
+      notify(String(e));
+    }
   };
 
   const runCheck = async () => {
@@ -596,6 +625,11 @@ export function Downloads({ status, progress, onChanged, notify, onImport, impor
             ))}
           {online && (
             <button className="btn" onClick={() => load(true)} disabled={loading}>Check for updates</button>
+          )}
+          {(personal.history > 0 || personal.places > 0) && (
+            <button className="btn" onClick={clearPersonal} title="Delete address history and the address book">
+              Clear personal data
+            </button>
           )}
           {status && (
             <button className="link-btn small" onClick={() => openPath(status.data_dir).catch(() => {})}>

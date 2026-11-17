@@ -97,6 +97,12 @@ export type ImportReport = {
   first_region?: string | null;
 };
 
+/** An address book entry; `name` is the user's own name for it. */
+export type SavedPlace = { id: string; name: string; hit: Hit; added: number };
+/** A place picked from search or used in a route. */
+export type HistoryItem = { hit: Hit; at: number };
+export type PlacesImportReport = { added: number; looked_up: number; skipped: string[] };
+
 export type SearchProgress = { channel: string; seq: number; done: number; total: number };
 
 /** True for the error of a search replaced by a newer one. */
@@ -157,6 +163,11 @@ export const api = {
   remove: (region: string) => invoke<void>("remove_region", { region }),
   importPacks: (paths: string[]) => invoke<ImportReport>("import_packs", { paths }),
   storage: () => invoke<StorageInfo>("storage_info"),
+  userGet: <T,>(kind: "history" | "places") => invoke<T>("user_get", { kind }),
+  userSet: (kind: "history" | "places", value: unknown) => invoke<void>("user_set", { kind, value }),
+  userClear: () => invoke<void>("user_clear"),
+  placesExport: (path: string) => invoke<number>("places_export", { path }),
+  placesImport: (path: string) => invoke<PlacesImportReport>("places_import", { path }),
   queue: () => invoke<QueueStatus>("queue_status"),
   queueAdd: (regions: string[]) => invoke<number>("queue_add", { regions }),
   queueRemove: (regions: string[]) => invoke<void>("queue_remove", { regions }),

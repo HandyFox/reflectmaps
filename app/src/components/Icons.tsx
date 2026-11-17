@@ -38,3 +38,11 @@ export function KindIcon({ kind }: { kind: string }) {
 }
 export const PrintIcon = ({ size = 16 }: P) =>
   svg(size, <><path d="M7 9V3h10v6" /><rect x="3" y="9" width="18" height="8" rx="2" /><path d="M7 14h10v7H7z" /></>);
+export const GripIcon = ({ size = 16 }: P) =>
+  svg(size, <><circle cx="9" cy="6" r="1" /><circle cx="15" cy="6" r="1" /><circle cx="9" cy="12" r="1" /><circle cx="15" cy="12" r="1" /><circle cx="9" cy="18" r="1" /><circle cx="15" cy="18" r="1" /></>);
+export const StarIcon = ({ size = 16, filled = false }: P & { filled?: boolean }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+    <path d="m12 3 2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8Z" />
+  </svg>
+);
+export const ClockIcon = ({ size = 16 }: P) => svg(size, <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></>);

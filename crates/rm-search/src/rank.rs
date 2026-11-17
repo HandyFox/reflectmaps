@@ -8,10 +8,11 @@
 
 use crate::normalize::{self, is_house_number, is_stop_word};
 use crate::Fields;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tantivy::schema::{TantivyDocument, Value};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Hit {
     pub id: String,
     pub kind: String,

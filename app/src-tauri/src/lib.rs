@@ -3,6 +3,7 @@ mod import;
 mod packs;
 mod queue;
 mod storage;
+mod userdata;
 mod pmtiles;
 mod routing;
 mod state;
@@ -279,6 +280,36 @@ fn cancel_check(state: St) {
     state.cancel.lock().unwrap().insert("check".into());
 }
 
+/// Address history ("history") or address book ("places") as JSON.
+#[tauri::command]
+fn user_get(state: St, kind: String) -> Result<serde_json::Value, String> {
+    userdata::get(&state, &kind).map_err(err)
+}
+
+#[tauri::command]
+fn user_set(state: St, kind: String, value: serde_json::Value) -> Result<(), String> {
+    userdata::set(&state, &kind, &value).map_err(err)
+}
+
+/// Deletes address history and the address book.
+#[tauri::command]
+fn user_clear(state: St) -> Result<(), String> {
+    userdata::clear(&state).map_err(err)
+}
+
+#[tauri::command]
+fn places_export(state: St, path: String) -> Result<usize, String> {
+    userdata::export_csv(&state, &PathBuf::from(path)).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn places_import(state: St<'_>, path: String) -> Result<userdata::ImportReport, String> {
+    let st = state.inner().clone();
+    tokio::task::spawn_blocking(move || userdata::import_csv(&st, &PathBuf::from(path)).map_err(|e| format!("{e:#}")))
+        .await
+        .map_err(err)?
+}
+
 /// Opens the system print dialog for the window. `window.print()` alone does
 /// nothing in the macOS web view, so printing goes through the native call.
 #[tauri::command]
@@ -353,7 +384,12 @@ pub fn run() {
             queue_resume,
             queue_clear_failed,
             check_data,
-            cancel_check
+            cancel_check,
+            user_get,
+            user_set,
+            user_clear,
+            places_export,
+            places_import
         ])
         .run(tauri::generate_context!())
         .expect("error while running ReflectMaps");

@@ -363,3 +363,31 @@ details.import-box > * + * { margin-top: 8px; }
 .back-btn { align-self: flex-start; margin-bottom: 4px; }
 .selectable { user-select: text; }
 .place-card .facts a { overflow-wrap: anywhere; }
+
+/* ---- stops, history, address book ---- */
+.wp-row { position: relative; }
+.wp-row.drag-active { transition: transform 0.15s ease; }
+.wp-row.dragging { transition: none; z-index: 5; opacity: 0.95; }
+.wp-row.dragging .searchbox-field { box-shadow: var(--shadow); }
+.wp-grip { flex: none; display: grid; place-items: center; width: 18px; height: 30px; color: var(--muted); cursor: grab; touch-action: none; border-radius: 6px; }
+.wp-grip:hover { color: var(--text); background: var(--bg-hover); }
+.wp-row.dragging .wp-grip { cursor: grabbing; }
+.context-menu li.sep { height: 1px; padding: 0; margin: 4px 0; background: var(--border); pointer-events: none; }
+.kind-saved { color: #d99a00; }
+.kind-recent { color: var(--muted); }
+.dropdown li .forget { margin-left: auto; opacity: 0; }
+.dropdown li:hover .forget, .dropdown li.active .forget { opacity: 1; }
+.dropdown-action.subtle { color: var(--muted); font-size: 12px; }
+.saved-btn { color: #b07d00; }
+.save-box { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 4px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
+.save-actions { display: flex; gap: 8px; }
+.saved-section { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.saved-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.saved-head h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 6px; color: var(--text); }
+.saved-head h3 svg { color: #d99a00; }
+.show-stars { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+.saved-list { list-style: none; margin: 8px 0; padding: 0; }
+.saved-list li { display: flex; gap: 10px; align-items: flex-start; padding: 7px 6px; border-radius: 8px; cursor: pointer; }
+.saved-list li:hover { background: var(--bg-hover); }
+.saved-tools { display: flex; gap: 14px; margin: 4px 0 8px; }
+.saved-section .note ul { margin: 4px 0; padding-left: 18px; }

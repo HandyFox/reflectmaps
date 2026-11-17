@@ -1,7 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { api, isCancelled, type Hit, type SearchProgress } from "../api";
+import { api, isCancelled, type HistoryItem, type Hit, type SavedPlace, type SearchProgress } from "../api";
 import { formatKm, kindLabel } from "../format";
-import { CloseIcon, KindIcon, SearchIcon } from "./Icons";
+import { samePlace, savedAsHit } from "../userData";
+import { ClockIcon, CloseIcon, KindIcon, SearchIcon, StarIcon } from "./Icons";
+
+/** Address history and address book offered by a search box. */
+export type SearchExtras = {
+  history: HistoryItem[];
+  places: SavedPlace[];
+  onForget: (h: Hit) => void;
+  onClearHistory: () => void;
+};
+
+type Item = { hit: Hit; from: "saved" | "recent" | "result" };
+
+const fold = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 type Props = {
   placeholder: string;
@@ -18,6 +31,7 @@ type Props = {
   autoFocus?: boolean;
   compact?: boolean;
   dot?: string;
+  extras?: SearchExtras;
 };
 
 let seqCounter = 0;
@@ -69,7 +83,7 @@ export function useSearchProgress(channel: string, seqRef: React.MutableRefObjec
 
 /** Search field with autocomplete over the installed search packs. */
 export function SearchBox(props: Props) {
-  const { placeholder, near, states, channel, onSelect, onSubmit, value, onClear, autoFocus, compact, dot } = props;
+  const { placeholder, near, states, channel, onSelect, onSubmit, value, onClear, autoFocus, compact, dot, extras } = props;
   const [query, setQuery] = useState(value ?? "");
   const [hits, setHits] = useState<Hit[]>([]);
   const [open, setOpen] = useState(false);
@@ -141,6 +155,26 @@ export function SearchBox(props: Props) {
 
   const noMatches = !busy && !error && hits.length === 0 && doneQuery === query && query.trim() !== "";
 
+  // Empty box: saved places and recent ones. Typing: matching saved places first.
+  const q = fold(query.trim());
+  const items: Item[] = [];
+  if (extras) {
+    if (!q) {
+      extras.places.slice(0, 8).forEach((p) => items.push({ hit: savedAsHit(p), from: "saved" }));
+      extras.history
+        .filter((x) => !extras.places.some((p) => samePlace(p.hit, x.hit)))
+        .slice(0, 8)
+        .forEach((x) => items.push({ hit: x.hit, from: "recent" }));
+    } else {
+      extras.places
+        .filter((p) => fold(`${p.name} ${p.hit.name} ${p.hit.label}`).includes(q))
+        .slice(0, 3)
+        .forEach((p) => items.push({ hit: savedAsHit(p), from: "saved" }));
+    }
+  }
+  if (q) hits.filter((h) => !items.some((it) => samePlace(it.hit, h))).forEach((h) => items.push({ hit: h, from: "result" }));
+  const showList = !!q ? items.length > 0 || !!error || noMatches : items.length > 0;
+
   return (
     <div className={`searchbox ${compact ? "compact" : ""}`}>
       <div className="searchbox-field">
@@ -161,14 +195,14 @@ export function SearchBox(props: Props) {
             if (e.key === "ArrowDown") {
               e.preventDefault();
               setNavigated(true);
-              setActive((a) => Math.min(a + 1, hits.length - 1));
+              setActive((a) => Math.min(a + 1, items.length - 1));
             } else if (e.key === "ArrowUp") {
               e.preventDefault();
               setNavigated(true);
               setActive((a) => Math.max(a - 1, 0));
             } else if (e.key === "Enter") {
-              if (onSubmit && !navigated) submit();
-              else if (hits[active]) choose(hits[active]);
+              if (onSubmit && !navigated && q) submit();
+              else if (items[active]) choose(items[active].hit);
             } else if (e.key === "Escape") {
               setOpen(false);
               input.current?.blur();
@@ -191,16 +225,16 @@ export function SearchBox(props: Props) {
           </button>
         )}
       </div>
-      {open && query.trim() && <SearchProgressLine p={progress} />}
-      {open && query.trim() && (hits.length > 0 || error || noMatches) && (
+      {open && q && <SearchProgressLine p={progress} />}
+      {open && showList && (
         <ul className="dropdown" role="listbox">
           {error && <li className="dropdown-error">{error}</li>}
-          {hits.map((h, i) => (
+          {items.map(({ hit: h, from }, i) => (
             <li
-              key={h.id}
+              key={`${from}:${h.id}:${i}`}
               role="option"
               aria-selected={i === active}
-              className={i === active && (navigated || !onSubmit) ? "active" : ""}
+              className={`${i === active && (navigated || !onSubmit || !q) ? "active" : ""} from-${from}`}
               onMouseDown={(e) => e.preventDefault()}
               onMouseEnter={() => {
                 setActive(i);
@@ -208,20 +242,45 @@ export function SearchBox(props: Props) {
               }}
               onClick={() => choose(h)}
             >
-              <KindIcon kind={h.kind} />
+              {from === "saved" ? (
+                <span className="kind kind-saved"><StarIcon filled /></span>
+              ) : from === "recent" ? (
+                <span className="kind kind-recent"><ClockIcon /></span>
+              ) : (
+                <KindIcon kind={h.kind} />
+              )}
               <div className="hit-text">
                 <div className="hit-name">{h.name}</div>
                 <div className="hit-label">
-                  {h.kind === "place" && h.category ? `${h.category.replace(/_/g, " ")} · ` : `${kindLabel(h.kind)} · `}
-                  {h.label}
-                  {h.approximate ? " · approximate" : ""}
+                  {from === "result"
+                    ? `${h.kind === "place" && h.category ? `${h.category.replace(/_/g, " ")} · ` : `${kindLabel(h.kind)} · `}${h.label}${h.approximate ? " · approximate" : ""}`
+                    : h.label}
                 </div>
               </div>
-              {h.distance_km !== undefined && <div className="hit-dist">{formatKm(h.distance_km)}</div>}
+              {from === "recent" && extras ? (
+                <button
+                  className="icon-btn subtle forget"
+                  title="Remove from history"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    extras.onForget(h);
+                  }}
+                >
+                  <CloseIcon size={14} />
+                </button>
+              ) : (
+                from === "result" && h.distance_km !== undefined && <div className="hit-dist">{formatKm(h.distance_km)}</div>
+              )}
             </li>
           ))}
-          {noMatches && <li className="dropdown-note muted small">No matches{scoped ? " in the chosen states" : ""}.</li>}
-          {scoped && !everywhere && (noMatches || hits.length > 0) && (
+          {!q && extras && extras.history.length > 0 && (
+            <li className="dropdown-action subtle" onMouseDown={(e) => e.preventDefault()} onClick={extras.onClearHistory}>
+              Clear history
+            </li>
+          )}
+          {q && noMatches && <li className="dropdown-note muted small">No matches{scoped ? " in the chosen states" : ""}.</li>}
+          {q && scoped && !everywhere && (noMatches || hits.length > 0) && (
             <li
               className="dropdown-action"
               onMouseDown={(e) => e.preventDefault()}
@@ -230,7 +289,7 @@ export function SearchBox(props: Props) {
               Search all states for “{query.trim()}”
             </li>
           )}
-          {onSubmit && hits.length > 0 && (
+          {q && onSubmit && hits.length > 0 && (
             <li className="dropdown-action" onMouseDown={(e) => e.preventDefault()} onClick={submit}>
               Show all results on the map <span className="muted small">(Enter)</span>
             </li>
